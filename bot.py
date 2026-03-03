@@ -117,8 +117,28 @@ def check_for_drops():
     supabase.table("prices").delete().lt("ts", cutoff).execute()
 
 def send_alert(t, drop, price, security):
-    is_dip = t['unique_wallets'] >= 500
-    header = "✅ **BUY THE DIP**" if is_dip else "🚨 **CRASH ALERT**"
-    risk = f"🚨 **RISK: {security}**" if "✅" not in security else "🛡️ Security: Clean"
+    # Determine the status
+    is_dip = t['unique_wallets'] >= 300  # community check
+    header = "✅ **BUY THE DIP OPPORTUNITY**" if is_dip else "🚨 **CRASH ALERT**"
+    risk_tag = f"🚨 **HIGH RISK: {security}**" if "✅" not in security else "🛡️ Security: Clean"
     
-    msg = (f"{header}\n\
+    # Use f-string with TRIPLE QUOTES for multi-line messages
+    msg = f"""{header}
+
+**{t['name']} ({t['symbol']})**
+💰 Cap: **${t['mcap']/1_000_000:.1f}M** | 👥 Wallets: **{t['unique_wallets']:,}**
+📉 Drop: **-{drop*100:.1f}%** (2h window)
+💵 Price: **${price:.8f}**
+
+📍 **CA:** `{t['address']}`
+{risk_tag}
+
+🔍 [RugCheck](https://rugcheck.xyz/tokens/{t['address']})
+📈 [DexScreener](https://dexscreener.com/solana/{t['address']})"""
+
+    try:
+        # Use disable_web_page_preview to keep the message clean
+        telebot.TeleBot(TELEGRAM_TOKEN).send_message(CHAT_ID, msg, parse_mode='Markdown', disable_web_page_preview=True)
+        print(f"Alert sent for {t['symbol']}")
+    except Exception as e:
+        print(f"Telegram Error: {e}")
