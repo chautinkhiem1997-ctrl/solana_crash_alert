@@ -14,7 +14,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- PRODUCTION SETTINGS ---
 TOTAL_MONITOR = 5000        
-DROP_THRESHOLD = 0.40       # 40% Crash
+DROP_THRESHOLD = 0.30       # 40% Crash
 MIN_MCAP = 1000000          # $1,000,000 Marketcap
 MIN_LIQUIDITY = 20000       
 COOLDOWN_SECONDS = 1800     # 30 Minutes
