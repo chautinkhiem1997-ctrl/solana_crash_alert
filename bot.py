@@ -91,7 +91,9 @@ def check_for_drops():
         supabase.table("prices").insert({"address": addr, "ts": now, "price": curr_p}).execute()
 
         # 2. Check 30-min Cooldown
-        last_alert = t.get('last_alert_ts') or 0
+        # Safely get the timestamp even if the cache is being stubborn
+        last_alert = t.get('last_alert_ts', 0) 
+        if last_alert is None: last_alert = 0
         if (now - last_alert) < COOLDOWN_SECONDS:
             continue
 
