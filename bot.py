@@ -12,17 +12,16 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- PRODUCTION SETTINGS ---
+# --- SETTINGS ---
 TOTAL_MONITOR = 5000        
-DROP_THRESHOLD = 0.30       # Trigger at 30% drop
-MIN_MCAP = 1000000          # $1,000,000 Marketcap
+DROP_THRESHOLD = 0.30       
+MIN_MCAP = 1000000          
 MIN_LIQUIDITY = 20000       
-COOLDOWN_SECONDS = 1800     # 30 Minutes
+COOLDOWN_SECONDS = 1800     
 TIMEFRAMES = [5, 30, 60, 120]
 
 def sync_tokens():
-    """Fetches 5,000 tokens with FIXED market cap and liquidity data."""
-    print(f"[{datetime.now()}] 🔄 Syncing 5,000 Tokens (MCAP > $1M)...", flush=True)
+    print(f"[{datetime.now()}] 🔄 Syncing 5,000 Tokens with Liquidity Data...", flush=True)
     url = "https://public-api.birdeye.so/defi/v3/token/list"
     headers = {"X-API-KEY": BIRDEYE_API_KEY, "x-chain": "solana"}
     
@@ -38,37 +37,31 @@ def sync_tokens():
             if r.status_code == 200:
                 items = r.json().get("data", {}).get("items", [])
                 for item in items:
-                    # FIX: Birdeye V3 uses 'market_cap' or 'fdv'. 'mc' is usually empty.
+                    # FETCHING REAL MCAP AND LIQUIDITY
                     mcap_val = item.get("market_cap") or item.get("fdv") or 0
-                    
                     discovered.append({
                         "address": item.get("address"),
                         "name": item.get("name"),
                         "symbol": item.get("symbol"),
                         "mcap": mcap_val,
-                        "v24h": item.get("v24h") or 0,        # Added Volume
-                        "liquidity": item.get("liquidity") or 0, # Added Liquidity
+                        "v24h": item.get("v24h") or 0,
+                        "liquidity": item.get("liquidity") or 0,
                         "last_alert_ts": 0
                     })
-                print(f"  > Offset {offset} reached...", flush=True)
             time.sleep(0.4) 
         except Exception as e:
-            print(f"  ❌ Sync Error at {offset}: {e}", flush=True)
+            print(f"❌ Sync Error: {e}")
             break
 
     if discovered:
-        # UPSERT prevents the 'Duplicate Key' error while updating prices/mcap
-        print(f"Upserting {len(discovered)} tokens to Supabase...", flush=True)
+        # UPSERT handles adding the new 'liquidity' column automatically
         supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
         print(f"✅ Sync Complete.", flush=True)
 
 def check_for_drops():
-    print(f"\n[{datetime.now()}] 📈 Running Multi-Timeframe Check...", flush=True)
-    
+    print(f"\n[{datetime.now()}] 📈 Checking Prices...", flush=True)
     tokens = supabase.table("tokens").select("address, name, symbol, mcap, last_alert_ts").execute().data
-    if not tokens:
-        print("❌ No tokens found in database.", flush=True)
-        return
+    if not tokens: return
 
     addrs = [t['address'] for t in tokens]
     now = int(time.time())
@@ -84,61 +77,33 @@ def check_for_drops():
         except: pass
         time.sleep(0.1)
 
-    alerts_sent = 0
     for t in tokens:
         addr = t['address']
         curr_p = current_prices.get(addr)
         if not curr_p: continue
-
-        # 1. Store Price History
         supabase.table("prices").insert({"address": addr, "ts": now, "price": curr_p}).execute()
 
-        # 2. Check Cooldown
         last_alert = t.get('last_alert_ts') or 0
-        if (now - last_alert) < COOLDOWN_SECONDS:
-            continue
+        if (now - last_alert) < COOLDOWN_SECONDS: continue
 
-        # 3. Timeframe Analysis
         for minutes in TIMEFRAMES:
             cutoff = now - (minutes * 60)
             old_res = supabase.table("prices").select("price").eq("address", addr).gte("ts", cutoff - 350).lte("ts", cutoff + 350).order("ts", desc=False).limit(1).execute().data
-            
             if old_res:
                 old_p = old_res[0]['price']
-                if old_p <= 0: continue
                 drop = (old_p - curr_p) / old_p
-                
                 if drop >= DROP_THRESHOLD:
                     send_alert(t, drop, curr_p)
                     supabase.table("tokens").update({"last_alert_ts": now}).eq("address", addr).execute()
-                    alerts_sent += 1
                     break 
 
-    # Keep database clean
     supabase.table("prices").delete().lt("ts", now - 10800).execute()
-    print(f"🏁 Cycle Finished. Alerts sent: {alerts_sent}", flush=True)
 
 def send_alert(t, drop, price):
-    msg = (
-        f"🚨 **CRASH ALERT**\n\n"
-        f"**Tokens:** {t['name']} ({t['symbol']})\n"
-        f"**Marketcap:** ${t['mcap']/1e6:.2f}M\n"
-        f"**Drop:** -{drop*100:.1f}%\n"
-        f"**Price:** ${price:.8f}\n"
-        f"**Contract address:** `{t['address']}`\n\n"
-        f"🔗 [Dexscreener](https://dexscreener.com/solana/{t['address']})"
-    )
-    try:
-        telebot.TeleBot(TELEGRAM_TOKEN).send_message(CHAT_ID, msg, parse_mode='Markdown', disable_web_page_preview=True)
+    msg = f"🚨 **CRASH ALERT**\n**Tokens:** {t['symbol']}\n**Drop:** -{drop*100:.1f}%\n**CA:** `{t['address']}`"
+    try: telebot.TeleBot(TELEGRAM_TOKEN).send_message(CHAT_ID, msg, parse_mode='Markdown')
     except: pass
 
 if __name__ == "__main__":
-    print("🚀 BOOTING UP...", flush=True)
-    try:
-        res = supabase.table("tokens").select("count", count="exact").execute()
-        print(f"Connected. DB has {res.count} tokens.", flush=True)
-        sync_tokens()
-        check_for_drops()
-        print(f"\n[{datetime.now()}] ✅ Job Finished Successfully.", flush=True)
-    except Exception as e:
-        print(f"\n🛑 CRITICAL ERROR: {e}", flush=True)
+    sync_tokens()
+    check_for_drops()
