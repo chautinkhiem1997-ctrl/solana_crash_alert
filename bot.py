@@ -1,19 +1,18 @@
 import os
 import requests
-import sqlite3
 import time
 from datetime import datetime
 import telebot
 from supabase import create_client, Client
 
 # ================== CLOUD SETTINGS ==================
-# These pull from your GitHub Secrets automatically
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 BIRDEYE_API_KEY = os.environ.get("BIRDEYE_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
+# Initialize Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Logic Filters
@@ -22,8 +21,8 @@ MIN_MCAP = 300000
 MAX_MCAP = 1000000000       
 MIN_LIQUIDITY = 15000       
 MIN_VOLUME_24H = 50000      
-DROP_THRESHOLD = 0.001       
-TIMEFRAME_MINUTES = 120    
+DROP_THRESHOLD = 0.01
+TIMEFRAME_MINUTES = 5    
 # ====================================================
 
 def get_token_security(address):
@@ -42,8 +41,7 @@ def get_token_security(address):
     return "❓ UNKNOWN"
 
 def sync_tokens():
-    """Daily Sync: Updates the 5,000 token list in Supabase."""
-    print("Deep-scanning 5,000 tokens...")
+    print(f"[{datetime.now()}] 🔄 Syncing 5,000 top tokens from Birdeye...")
     url = "https://public-api.birdeye.so/defi/v3/token/list"
     headers = {"X-API-KEY": BIRDEYE_API_KEY, "x-chain": "solana"}
     
@@ -67,40 +65,47 @@ def sync_tokens():
                         "mcap": item.get("mc") or 0,
                         "unique_wallets": item.get("uniqueWallet24h") or 0
                     })
-            time.sleep(0.5)
+                if offset % 500 == 0:
+                    print(f"  > Logged {len(discovered)} tokens...")
+            time.sleep(0.6)
         except: break
 
     if discovered:
-        # Update Supabase
+        print(f"Saving {len(discovered)} tokens to Supabase...")
         supabase.table("tokens").delete().neq("address", "0").execute()
         supabase.table("tokens").insert(discovered).execute()
-        print(f"Sync Complete: {len(discovered)} tokens.")
+        print("✅ Sync Complete.")
 
 def check_for_drops():
-    print("Checking for crashes...")
-    # Get tokens and prices
+    print(f"[{datetime.now()}] 📈 Fetching prices for 5,000 tokens...")
     tokens = supabase.table("tokens").select("*").execute().data
-    addrs = [t['address'] for t in tokens]
+    if not tokens: return
     
-    # Batch fetch prices from DexScreener
+    addrs = [t['address'] for t in tokens]
     current_prices = {}
+    
+    # DexScreener Batch Price Fetch
     for i in range(0, len(addrs), 30):
         batch = addrs[i:i+30]
-        r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(batch)}")
-        if r.status_code == 200:
-            for pair in r.json().get("pairs", []):
-                current_prices[pair.get("baseToken", {}).get("address")] = float(pair.get("priceUsd", 0))
+        try:
+            r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(batch)}", timeout=15)
+            if r.status_code == 200:
+                for pair in r.json().get("pairs", []):
+                    addr = pair.get("baseToken", {}).get("address")
+                    current_prices[addr] = float(pair.get("priceUsd", 0))
+        except: pass
         time.sleep(0.2)
 
     now = int(time.time())
     cutoff = now - (TIMEFRAME_MINUTES * 60)
+    alerts_count = 0
 
     for t in tokens:
         addr = t['address']
         curr_p = current_prices.get(addr)
         if not curr_p: continue
 
-        # Compare with old price in Supabase
+        # Compare with old price (History)
         old_res = supabase.table("prices").select("price").eq("address", addr).order("ts", desc=False).limit(1).execute().data
         
         if old_res:
@@ -109,24 +114,24 @@ def check_for_drops():
             if drop >= DROP_THRESHOLD:
                 security = get_token_security(addr)
                 send_alert(t, drop, curr_p, security)
+                alerts_count += 1
 
-        # Update price history in Supabase
+        # Save current price for next cycle
         supabase.table("prices").insert({"address": addr, "ts": now, "price": curr_p}).execute()
 
-    # Clean old prices
-    supabase.table("prices").delete().lt("ts", cutoff).execute()
+    # Clear prices older than 6 hours
+    supabase.table("prices").delete().lt("ts", now - 21600).execute()
+    print(f"✅ Check complete. Alerts sent: {alerts_count}")
 
 def send_alert(t, drop, price, security):
-    # Determine the status
-    is_dip = t['unique_wallets'] >= 300  # community check
+    is_dip = t['unique_wallets'] >= 300
     header = "✅ **BUY THE DIP OPPORTUNITY**" if is_dip else "🚨 **CRASH ALERT**"
     risk_tag = f"🚨 **HIGH RISK: {security}**" if "✅" not in security else "🛡️ Security: Clean"
     
-    # Use f-string with TRIPLE QUOTES for multi-line messages
     msg = f"""{header}
 
 **{t['name']} ({t['symbol']})**
-💰 Cap: **${t['mcap']/1_000_000:.1f}M** | 👥 Wallets: **{t['unique_wallets']:,}**
+💰 Cap: **${t['mcap']/1e6:.1f}M** | 👥 Wallets: **{t['unique_wallets']:,}**
 📉 Drop: **-{drop*100:.1f}%** (2h window)
 💵 Price: **${price:.8f}**
 
@@ -137,8 +142,22 @@ def send_alert(t, drop, price, security):
 📈 [DexScreener](https://dexscreener.com/solana/{t['address']})"""
 
     try:
-        # Use disable_web_page_preview to keep the message clean
         telebot.TeleBot(TELEGRAM_TOKEN).send_message(CHAT_ID, msg, parse_mode='Markdown', disable_web_page_preview=True)
-        print(f"Alert sent for {t['symbol']}")
     except Exception as e:
         print(f"Telegram Error: {e}")
+
+if __name__ == "__main__":
+    print(f"[{datetime.now()}] 🚀 BOT STARTING...")
+    try:
+        count_res = supabase.table("tokens").select("count", count="exact").limit(1).execute()
+        count = count_res.count
+        print(f"📊 Current database size: {count} tokens.")
+        
+        # Sync if empty or every 24 hours (roughly)
+        if count < 100 or int(time.time()) % 86400 < 300:
+            sync_tokens()
+            
+        check_for_drops()
+        print(f"[{datetime.now()}] 😴 Task complete. Shutting down.")
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR: {e}")
