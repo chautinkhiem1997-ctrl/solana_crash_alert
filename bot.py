@@ -22,7 +22,7 @@ MIN_MCAP = 300000
 MAX_MCAP = 1000000000       
 MIN_LIQUIDITY = 15000       
 MIN_VOLUME_24H = 50000      
-DROP_THRESHOLD = 0.40       
+DROP_THRESHOLD = 0.001       
 TIMEFRAME_MINUTES = 120    
 # ====================================================
 
