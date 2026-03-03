@@ -15,13 +15,13 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # --- PRODUCTION SETTINGS ---
 TOTAL_MONITOR = 5000        
 DROP_THRESHOLD = 0.40       # 40% Crash
-MIN_MCAP = 1000000          # $1M Marketcap
+MIN_MCAP = 1000000          # $1,000,000 Marketcap
 MIN_LIQUIDITY = 20000       
-COOLDOWN_SECONDS = 1800     # 30 Minutes Lockout
+COOLDOWN_SECONDS = 1800     # 30 Minutes
 TIMEFRAMES = [5, 30, 60, 120]
 
 def sync_tokens():
-    """Fetches the top 5,000 tokens and saves them to the 'Brain'."""
+    """Fetches 5,000 tokens and displays the 'Offset' list in logs."""
     print(f"[{datetime.now()}] 🔄 Syncing 5,000 Tokens (MCAP > $1M)...", flush=True)
     url = "https://public-api.birdeye.so/defi/v3/token/list"
     headers = {"X-API-KEY": BIRDEYE_API_KEY, "x-chain": "solana"}
@@ -45,34 +45,39 @@ def sync_tokens():
                         "mcap": item.get("mc") or 0,
                         "last_alert_ts": 0
                     })
-            time.sleep(0.5) # Respect API limits
-        except: break
+                print(f"  > Offset {offset} reached...", flush=True)
+            time.sleep(0.5) 
+        except Exception as e:
+            print(f"  ❌ Sync Error at {offset}: {e}", flush=True)
+            break
 
     if discovered:
+        # Clear and replace the 'Brain'
         supabase.table("tokens").delete().neq("address", "0").execute()
         supabase.table("tokens").insert(discovered).execute()
-        print(f"✅ Sync Complete: {len(discovered)} tokens saved.", flush=True)
+        print(f"✅ Sync Complete. Pushing {len(discovered)} tokens to Supabase.", flush=True)
 
 def check_for_drops():
-    """Main logic: Compares current prices against history."""
-    print(f"[{datetime.now()}] 📈 Running Multi-Timeframe Check...", flush=True)
+    """Checks all tokens for crashes across 4 timeframes."""
+    print(f"\n[{datetime.now()}] 📈 Running Multi-Timeframe Check...", flush=True)
     tokens = supabase.table("tokens").select("*").execute().data
-    if not tokens: return
+    if not tokens:
+        print("❌ No tokens found in database. Forcing emergency sync.", flush=True)
+        sync_tokens()
+        return
 
     addrs = [t['address'] for t in tokens]
     now = int(time.time())
-    
     current_prices = {}
-    # Fetch current prices from DexScreener in batches of 30
+
+    # Fetch prices in batches of 30 for DexScreener
     for i in range(0, len(addrs), 30):
         batch = addrs[i:i+30]
         try:
             r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(batch)}", timeout=15)
             if r.status_code == 200:
-                pairs = r.json().get("pairs", [])
-                for pair in pairs:
-                    base_addr = pair.get("baseToken", {}).get("address")
-                    current_prices[base_addr] = float(pair.get("priceUsd", 0))
+                for pair in r.json().get("pairs", []):
+                    current_prices[pair.get("baseToken", {}).get("address")] = float(pair.get("priceUsd", 0))
         except: pass
         time.sleep(0.1)
 
@@ -82,7 +87,7 @@ def check_for_drops():
         curr_p = current_prices.get(addr)
         if not curr_p: continue
 
-        # 1. Save new price to history
+        # 1. Store Price History
         supabase.table("prices").insert({"address": addr, "ts": now, "price": curr_p}).execute()
 
         # 2. Check 30-min Cooldown
@@ -90,10 +95,9 @@ def check_for_drops():
         if (now - last_alert) < COOLDOWN_SECONDS:
             continue
 
-        # 3. Check each Timeframe (5, 30, 60, 120)
+        # 3. Timeframe Analysis
         for minutes in TIMEFRAMES:
             cutoff = now - (minutes * 60)
-            # Find a price snapshot within 5-min range of the cutoff
             old_res = supabase.table("prices").select("price").eq("address", addr).gte("ts", cutoff - 300).lte("ts", cutoff + 300).order("ts", desc=False).limit(1).execute().data
             
             if old_res:
@@ -103,17 +107,16 @@ def check_for_drops():
                 
                 if drop >= DROP_THRESHOLD:
                     send_alert(t, drop, curr_p)
-                    # Update cooldown in Supabase
+                    # Update Cooldown Memory
                     supabase.table("tokens").update({"last_alert_ts": now}).eq("address", addr).execute()
                     alerts_sent += 1
                     break 
 
-    # Cleanup: Delete data older than 3 hours to stay in Supabase free tier
+    # Cleanup old prices to stay under Supabase free limits
     supabase.table("prices").delete().lt("ts", now - 10800).execute()
     print(f"🏁 Cycle Finished. Alerts sent: {alerts_sent}", flush=True)
 
 def send_alert(t, drop, price):
-    """The exact Telegram format you requested."""
     msg = (
         f"🚨 **CRASH ALERT**\n\n"
         f"**Tokens:** {t['name']} ({t['symbol']})\n"
@@ -131,11 +134,19 @@ def send_alert(t, drop, price):
 if __name__ == "__main__":
     print("🚀 BOOTING UP...", flush=True)
     try:
-        # Check if we have data; sync once a day or if database is empty
+        # Check current DB status
         res = supabase.table("tokens").select("count", count="exact").execute()
-        if res.count < 100 or int(time.time()) % 86400 < 600:
-            sync_tokens()
+        token_count = res.count
+        print(f"\nConnected. DB has {token_count} tokens.", flush=True)
+
+        # FORCE SYNC EVERY RUN (For scrolling log visibility)
+        print(f"\n[{datetime.now()}] 📈 Price Check Started...", flush=True)
+        print("\n❌ Refreshing token list. Syncing now...", flush=True)
         
+        sync_tokens()
         check_for_drops()
+        
+        print(f"\n[{datetime.now()}] ✅ Cycle Finished.", flush=True)
+
     except Exception as e:
-        print(f"🛑 Error: {e}", flush=True)
+        print(f"\n🛑 CRITICAL ERROR: {e}", flush=True)
