@@ -1,23 +1,27 @@
 name: Solana Crash Watchdog
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/5 * * * *'  # Runs every 5 minutes
+  workflow_dispatch:       # Allows you to click "Run manually"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Install
+
+      - name: Install Dependencies
         run: pip install requests pyTelegramBotAPI supabase
-      - name: Run
+
+      - name: Run The Bot
         env:
+          PYTHONUNBUFFERED: 1  # <--- THIS IS THE FIX: It forces logs to show up live
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           BIRDEYE_API_KEY: ${{ secrets.BIRDEYE_API_KEY }}
