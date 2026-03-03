@@ -21,7 +21,7 @@ COOLDOWN_SECONDS = 1800     # 30 Minutes
 TIMEFRAMES = [5, 30, 60, 120]
 
 def sync_tokens():
-    """Fetches 5,000 tokens and displays the 'Offset' list in logs."""
+    """Fetches 5,000 tokens and uses UPSERT to prevent duplicate key errors."""
     print(f"[{datetime.now()}] 🔄 Syncing 5,000 Tokens (MCAP > $1M)...", flush=True)
     url = "https://public-api.birdeye.so/defi/v3/token/list"
     headers = {"X-API-KEY": BIRDEYE_API_KEY, "x-chain": "solana"}
@@ -42,35 +42,36 @@ def sync_tokens():
                         "address": item.get("address"),
                         "name": item.get("name"),
                         "symbol": item.get("symbol"),
-                        "mcap": item.get("mc") or 0,
-                        "last_alert_ts": 0
+                        "mcap": item.get("mc") or 0
+                        # We don't overwrite last_alert_ts during sync to preserve cooldown
                     })
                 print(f"  > Offset {offset} reached...", flush=True)
-            time.sleep(0.5) 
+            time.sleep(0.4) 
         except Exception as e:
             print(f"  ❌ Sync Error at {offset}: {e}", flush=True)
             break
 
     if discovered:
-        # Clear and replace the 'Brain'
-        supabase.table("tokens").delete().neq("address", "0").execute()
-        supabase.table("tokens").insert(discovered).execute()
-        print(f"✅ Sync Complete. Pushing {len(discovered)} tokens to Supabase.", flush=True)
+        # UPSERT: If address exists, update name/mcap. If not, insert new.
+        # This is the fix for the 'Duplicate Key' error.
+        print(f"Upserting {len(discovered)} tokens to Supabase...", flush=True)
+        supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
+        print(f"✅ Sync Complete.", flush=True)
 
 def check_for_drops():
-    """Checks all tokens for crashes across 4 timeframes."""
     print(f"\n[{datetime.now()}] 📈 Running Multi-Timeframe Check...", flush=True)
-    tokens = supabase.table("tokens").select("*").execute().data
+    
+    # Fetch tokens AND their last alert times
+    tokens = supabase.table("tokens").select("address, name, symbol, mcap, last_alert_ts").execute().data
     if not tokens:
-        print("❌ No tokens found in database. Forcing emergency sync.", flush=True)
-        sync_tokens()
+        print("❌ No tokens found in database.", flush=True)
         return
 
     addrs = [t['address'] for t in tokens]
     now = int(time.time())
     current_prices = {}
 
-    # Fetch prices in batches of 30 for DexScreener
+    # Batch fetch current prices
     for i in range(0, len(addrs), 30):
         batch = addrs[i:i+30]
         try:
@@ -90,17 +91,15 @@ def check_for_drops():
         # 1. Store Price History
         supabase.table("prices").insert({"address": addr, "ts": now, "price": curr_p}).execute()
 
-        # 2. Check 30-min Cooldown
-        # Safely get the timestamp even if the cache is being stubborn
-        last_alert = t.get('last_alert_ts', 0) 
-        if last_alert is None: last_alert = 0
+        # 2. Check Cooldown (Safe fetch)
+        last_alert = t.get('last_alert_ts') or 0
         if (now - last_alert) < COOLDOWN_SECONDS:
             continue
 
-        # 3. Timeframe Analysis
+        # 3. Timeframe Check
         for minutes in TIMEFRAMES:
             cutoff = now - (minutes * 60)
-            old_res = supabase.table("prices").select("price").eq("address", addr).gte("ts", cutoff - 300).lte("ts", cutoff + 300).order("ts", desc=False).limit(1).execute().data
+            old_res = supabase.table("prices").select("price").eq("address", addr).gte("ts", cutoff - 350).lte("ts", cutoff + 350).order("ts", desc=False).limit(1).execute().data
             
             if old_res:
                 old_p = old_res[0]['price']
@@ -109,12 +108,12 @@ def check_for_drops():
                 
                 if drop >= DROP_THRESHOLD:
                     send_alert(t, drop, curr_p)
-                    # Update Cooldown Memory
+                    # Update Cooldown
                     supabase.table("tokens").update({"last_alert_ts": now}).eq("address", addr).execute()
                     alerts_sent += 1
                     break 
 
-    # Cleanup old prices to stay under Supabase free limits
+    # Cleanup old price history
     supabase.table("prices").delete().lt("ts", now - 10800).execute()
     print(f"🏁 Cycle Finished. Alerts sent: {alerts_sent}", flush=True)
 
@@ -130,25 +129,19 @@ def send_alert(t, drop, price):
     )
     try:
         telebot.TeleBot(TELEGRAM_TOKEN).send_message(CHAT_ID, msg, parse_mode='Markdown', disable_web_page_preview=True)
-    except Exception as e:
-        print(f"Telegram Error: {e}")
+    except: pass
 
 if __name__ == "__main__":
     print("🚀 BOOTING UP...", flush=True)
     try:
-        # Check current DB status
+        # Confirm connection
         res = supabase.table("tokens").select("count", count="exact").execute()
-        token_count = res.count
-        print(f"\nConnected. DB has {token_count} tokens.", flush=True)
+        print(f"Connected. DB has {res.count} tokens.", flush=True)
 
-        # FORCE SYNC EVERY RUN (For scrolling log visibility)
-        print(f"\n[{datetime.now()}] 📈 Price Check Started...", flush=True)
-        print("\n❌ Refreshing token list. Syncing now...", flush=True)
-        
+        # Force sync and log display
         sync_tokens()
         check_for_drops()
         
-        print(f"\n[{datetime.now()}] ✅ Cycle Finished.", flush=True)
-
+        print(f"\n[{datetime.now()}] ✅ Job Finished Successfully.", flush=True)
     except Exception as e:
         print(f"\n🛑 CRITICAL ERROR: {e}", flush=True)
