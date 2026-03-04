@@ -21,7 +21,7 @@ solana = SolanaClient(RPC_URL)
 # --- SETTINGS ---
 DROP_THRESHOLD = 0.30       
 COOLDOWN_SECONDS = 1800     
-TIMEFRAMES = [5, 30, 60, 120]
+TIMEFRAMES = [5, 10, 30, 60, 120, 180]
 
 def sync_tokens():
     print(f"[{datetime.now()}] 🔄 Fetching Jupiter Verified List (V2 API)...", flush=True)
@@ -95,10 +95,8 @@ def check_for_drops():
     for i in range(0, len(addrs), 50): 
         batch = addrs[i:i+50]
         try:
-            # We define 'r' right here
             r = requests.get(f"https://api.jup.ag/price/v3?ids={','.join(batch)}", headers=headers, timeout=15)
             
-            # This MUST be indented inside the 'try' block so it can see 'r'
             if r.status_code == 200:
                 resp_json = r.json()
                 data = resp_json.get("data", resp_json)
@@ -110,11 +108,10 @@ def check_for_drops():
                 print(f"⚠️ Jupiter V3 Error: {r.status_code}", flush=True)
                 
         except Exception as e:
-            # If the request fails entirely, 'r' is never created, 
-            # so we handle the error here instead of checking r.status_code
             print(f"❌ Price Request Failed: {e}", flush=True)
         
         time.sleep(0.3)
+
     # 2. LOG PRICES & CALCULATE MCAP
     price_logs = []
     for t in tokens:
@@ -145,15 +142,47 @@ def check_for_drops():
             print(f"❌ Supabase Insert Error: {e}", flush=True)
 
     # 3. CRASH DETECTION (Compares current price to history)
-    # ... (Your existing crash math logic goes here)
+    print("🔍 Calculating price drops...", flush=True)
+    for t in tokens:
+        addr = t['address']
+        curr_p = current_prices.get(addr)
+        if not curr_p: continue
+
+        # Check if we are still in the 30-minute cooldown window
+        last_alert = t.get('last_alert_ts') or 0
+        if (now - last_alert) < COOLDOWN_SECONDS: 
+            continue 
+
+        for minutes in TIMEFRAMES:
+            cutoff = now - (minutes * 60)
+            
+            # Find a price from exactly 'minutes' ago (gives a 5-minute grace window)
+            old_res = supabase.table("prices").select("price").eq("address", addr).gte("ts", cutoff - 300).lte("ts", cutoff + 300).order("ts", desc=False).limit(1).execute().data
+            
+            if old_res:
+                old_p = old_res[0]['price']
+                if old_p <= 0: continue # Prevent division by zero
+                
+                # Math: (Old - New) / Old
+                drop = (old_p - curr_p) / old_p
+                
+                if drop >= DROP_THRESHOLD:
+                    send_alert(t, drop, curr_p, minutes)
+                    supabase.table("tokens").update({"last_alert_ts": now}).eq("address", addr).execute()
+                    print(f"🚨 ALERT FIRED: {t['symbol']} dropped {drop*100:.1f}% in {minutes}m", flush=True)
+                    break # Stop checking other timeframes to avoid spamming multiple alerts
+
+    # Cleanup history older than 4 hours (14400 sec) so we don't delete the 180m data!
+    supabase.table("prices").delete().lt("ts", now - 14400).execute()
     print("🏁 Price check cycle complete!", flush=True)
-def send_alert(t, drop, price):
+
+def send_alert(t, drop, price, minutes):
     mcap_display = f"${t['mcap']/1e6:.2f}M" if t.get('mcap', 0) > 0 else "N/A"
     msg = (
         f"🚨 **VERIFIED TOKEN CRASH**\n\n"
         f"**Token:** {t['name']} ({t['symbol']})\n"
         f"**Price:** ${price:.6f}\n"
-        f"**Drop:** -{drop*100:.1f}%\n"
+        f"**Drop:** -{drop*100:.1f}% in {minutes} mins\n"
         f"**MCAP:** {mcap_display}\n"
         f"**CA:** `{t['address']}`\n\n"
         f"🔗 [Dexscreener](https://dexscreener.com/solana/{t['address']})"
