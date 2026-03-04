@@ -80,13 +80,15 @@ def check_for_drops():
         print("⚠️ No tokens found in database. Did the sync fail?", flush=True)
         return
 
-    addrs = [t['address'] for t in tokens]
+    addrs = [t['address'] for t in tokens if t.get('address')]
     now = int(time.time())
     current_prices = {}
 
+    # --- THE FIX: We added the VIP Pass (x-api-key) ---
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "x-api-key": JUPITER_API_KEY  # <--- THIS WAS MISSING!
     }
 
     # 1. FETCH PRICES (Jupiter v2 API)
@@ -116,12 +118,11 @@ def check_for_drops():
         curr_p = current_prices.get(addr)
         if not curr_p: continue
 
-        # --- THE FIX: Stop hiding errors and add a speed bump ---
+        # Update Market Cap if it's missing (Price * Supply)
         if t.get('mcap') == 0 or t.get('mcap') is None:
             try:
                 supply_res = solana.get_token_supply(Pubkey.from_string(addr))
                 
-                # Safely extract the token supply amount
                 if hasattr(supply_res, 'value') and supply_res.value:
                     supply = supply_res.value.ui_amount or 0
                 else:
@@ -131,11 +132,9 @@ def check_for_drops():
                 supabase.table("tokens").update({"mcap": t['mcap']}).eq("address", addr).execute()
                 print(f"💰 {t['symbol']} MCAP updated: ${t['mcap']:,.0f}", flush=True)
                 
-                # SPEED BUMP: Prevents the RPC server from blocking us for spam
-                time.sleep(0.1) 
+                time.sleep(0.1) # Speed bump to protect your RPC URL
                 
             except Exception as e: 
-                # NOW it will tell us exactly WHY it is failing!
                 print(f"❌ MCAP Error for {t['symbol']}: {e}", flush=True)
 
         # Log price history
