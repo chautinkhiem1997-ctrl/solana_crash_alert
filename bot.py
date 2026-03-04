@@ -75,23 +75,43 @@ def check_for_drops():
     print(f"\n[{datetime.now()}] 📈 Checking Prices via Jupiter...", flush=True)
     res = supabase.table("tokens").select("address, name, symbol, mcap, last_alert_ts").execute()
     tokens = res.data
-    if not tokens: return
+    
+    if not tokens: 
+        print("⚠️ No tokens found in database. Did the sync fail?", flush=True)
+        return
 
     addrs = [t['address'] for t in tokens]
     now = int(time.time())
     current_prices = {}
 
+    # --- THE FIX: Add the disguise headers! ---
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/json"
+    }
+
     # 1. FETCH PRICES (Jupiter v2 API)
     for i in range(0, len(addrs), 100):
         batch = addrs[i:i+100]
         try:
-            r = requests.get(f"https://api.jup.ag/price/v2?ids={','.join(batch)}", timeout=15)
+            r = requests.get(f"https://api.jup.ag/price/v2?ids={','.join(batch)}", headers=headers, timeout=15)
             if r.status_code == 200:
                 data = r.json().get("data", {})
                 for addr, info in data.items():
                     if info: current_prices[addr] = float(info.get("price", 0))
-        except: pass
+            else:
+                # No more sweeping errors under the rug!
+                print(f"⚠️ Jupiter Price Blocked: {r.status_code}", flush=True)
+        except Exception as e:
+            print(f"❌ Price Request Failed: {e}", flush=True)
+            
         time.sleep(0.2)
+
+    if not current_prices:
+        print("❌ Failed to fetch any prices. Skipping Supabase update.", flush=True)
+        return
+
+    print(f"✅ Fetched {len(current_prices)} prices. Updating Supabase...", flush=True)
 
     # 2. CALCULATE MCAP & CHECK DROPS
     for t in tokens:
@@ -128,7 +148,7 @@ def check_for_drops():
 
     # Cleanup history older than 3h
     supabase.table("prices").delete().lt("ts", now - 10800).execute()
-
+    print("✅ Price check and database update complete!", flush=True)
 def send_alert(t, drop, price):
     mcap_display = f"${t['mcap']/1e6:.2f}M" if t.get('mcap', 0) > 0 else "N/A"
     msg = (
