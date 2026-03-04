@@ -1,5 +1,5 @@
 requests
-python-telegram-bot
+pyTelegramBotAPI
 supabase
 pandas
 streamlit
