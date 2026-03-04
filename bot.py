@@ -22,13 +22,15 @@ TIMEFRAMES = [5, 30, 60, 120]
 
 def sync_tokens():
     print(f"[{datetime.now()}] 🔄 Fetching Jupiter Verified List...", flush=True)
-    # Using the official public Strict List
-    url = "https://token.jup.ag/strict"
     
-    # The "Disguise" - This stops Cloudflare from blocking GitHub Actions
+    # THE FIX: The new 2026 Master List URL (Notice the "s" in tokens)
+    url = "https://tokens.jup.ag/tokens?tags=verified"
+    
+    # THE FIX: Added 'Referer' which Jupiter's new API requires
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/json",
+        "Referer": "https://jup.ag/"
     }
     
     try:
@@ -53,13 +55,11 @@ def sync_tokens():
                 supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
                 print(f"✅ Sync Complete: {len(discovered)} verified tokens loaded into Supabase.", flush=True)
         else:
-            # If it fails, this will now ACTUALLY tell us why!
-            print(f"❌ Jupiter API Blocked us. Status Code: {r.status_code}", flush=True)
+            print(f"❌ Jupiter API Error. Status Code: {r.status_code}", flush=True)
             print(f"Raw Response: {r.text[:200]}", flush=True)
             
     except Exception as e:
         print(f"❌ Sync Error: {e}", flush=True)
-
 def check_for_drops():
     print(f"\n[{datetime.now()}] 📈 Checking Prices via Jupiter...", flush=True)
     res = supabase.table("tokens").select("address, name, symbol, mcap, last_alert_ts").execute()
