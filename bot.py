@@ -23,10 +23,16 @@ TIMEFRAMES = [5, 30, 60, 120]
 def sync_tokens():
     print(f"[{datetime.now()}] 🔄 Starting Sync for {TOTAL_MONITOR} Tokens...", flush=True)
     url = "https://public-api.birdeye.so/defi/v3/token/list"
-    headers = {"X-API-KEY": BIRDEYE_API_KEY, "x-chain": "solana"}
+    
+    # ADDED 'accept' and 'x-chain' explicitly to headers for better compatibility
+    headers = {
+        "X-API-KEY": BIRDEYE_API_KEY, 
+        "x-chain": "solana",
+        "accept": "application/json"
+    }
     
     discovered = []
-    total_processed = 0 # Counter for all tokens found across all pages
+    total_processed = 0 
     
     for offset in range(0, TOTAL_MONITOR, 50):
         params = {
@@ -36,13 +42,30 @@ def sync_tokens():
         }
         try:
             r = requests.get(url, headers=headers, params=params, timeout=15)
+            
+            # --- DIAGNOSTIC SECTION ---
+            # This tells us if the connection is working even if the data is empty
+            print(f"DEBUG: Offset {offset} | Status {r.status_code} | Resp Length: {len(r.text)}", flush=True)
+            
+            if r.status_code == 401 or r.status_code == 403:
+                print("❌ BLOCK DETECTED: API Key is invalid, expired, or blocked by Birdeye.", flush=True)
+                break
+            
+            if r.status_code == 429:
+                print("⏳ RATE LIMIT: Birdeye is telling us to slow down. Sleeping...", flush=True)
+                time.sleep(5)
+                continue
+            # --------------------------
+
             if r.status_code == 200:
-                items = r.json().get("data", {}).get("items", [])
+                data = r.json().get("data", {})
+                items = data.get("items", [])
+                
+                if not items:
+                    print(f"⚠️ EMPTY PAGE: No tokens found at offset {offset}. Check if your MCAP/LIQ filters are too high.", flush=True)
                 
                 for item in items:
                     mcap_val = item.get("market_cap") or item.get("fdv") or 0
-                    
-                    # Create the token data
                     new_token = {
                         "address": item.get("address"),
                         "name": item.get("name"),
@@ -52,33 +75,25 @@ def sync_tokens():
                         "liquidity": float(item.get("liquidity") or 0),
                         "last_alert_ts": 0
                     }
-                    
                     discovered.append(new_token)
                     total_processed += 1
-                    
-                    # LIVE COUNTER: This prints for EVERY token found
-                    print(f"   [+] Added {new_token['symbol']} to list. (Total: {total_processed})", flush=True)
+                    print(f"   [+] Added {new_token['symbol']} (Total: {total_processed})", flush=True)
                 
-                # BATCH SAVING: Save every 500 tokens to keep the database updated
                 if len(discovered) >= 500:
                     print(f"📦 DB SYNC: Saving batch of {len(discovered)} to Supabase...", flush=True)
                     supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
                     discovered = [] 
-                    
-                print(f"--- Page at Offset {offset} Finished ---", flush=True)
             
-            time.sleep(0.5) # Anti-rate limit
+            time.sleep(0.6) # Slightly slower to avoid triggering blocks
         except Exception as e:
             print(f"❌ ERROR at offset {offset}: {e}")
             break
 
-    # Save any remaining tokens that didn't make a full batch of 500
     if discovered:
         print(f"📦 DB SYNC: Saving final batch of {len(discovered)}...", flush=True)
         supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
 
     print(f"✅ Sync Phase Complete. Total Tokens Found: {total_processed}", flush=True)
-
 def check_for_drops():
     print(f"\n[{datetime.now()}] 📈 Checking Prices for Drops...", flush=True)
     try:
