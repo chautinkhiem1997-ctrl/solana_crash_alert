@@ -31,7 +31,7 @@ def sync_tokens():
         print("❌ ERROR: Missing JUPITER_API_KEY in GitHub Secrets!", flush=True)
         return
 
-    # 1. Get the list of ALL verified mint addresses
+    # 1. Get the list of ALL verified mints
     tag_url = "https://api.jup.ag/tokens/v2/tag?query=verified"
     headers = {"x-api-key": JUPITER_API_KEY}
     
@@ -47,24 +47,51 @@ def sync_tokens():
         discovered = []
         top_mints = all_mints[:1000]
         
-        # 2. Fetch the Name/Symbol for these mints in batches of 100
-        for i in range(0, len(top_mints), 100):
-            batch = top_mints[i:i+100]
-            search_url = f"https://api.jup.ag/tokens/v2/search?query={','.join(batch)}"
-            res = requests.get(search_url, headers=headers, timeout=15)
-            
-            if res.status_code == 200:
-                tokens_info = res.json()
-                for t in tokens_info:
-                    discovered.append({
-                        "address": t.get('id'), # V2 API uses 'id' instead of 'address'
-                        "name": t.get('name'),
-                        "symbol": t.get('symbol'),
-                        "mcap": 0,
-                        "liquidity": 0,
-                        "last_alert_ts": 0
-                    })
-            time.sleep(0.5) # Anti-rate limit
+        # --- THE FIX: Check if Jupiter already gave us the full Token Data ---
+        first_item = top_mints[0]
+        if isinstance(first_item, dict) and ('name' in first_item or 'symbol' in first_item):
+            print("⚡ Token data already included! Skipping search phase...", flush=True)
+            for t in top_mints:
+                discovered.append({
+                    "address": t.get('id') or t.get('address'),
+                    "name": t.get('name', 'Unknown'),
+                    "symbol": t.get('symbol', 'Unknown'),
+                    "mcap": 0,
+                    "liquidity": 0,
+                    "last_alert_ts": 0
+                })
+        else:
+            # --- FALLBACK: If they only gave us dictionaries of IDs, extract the strings ---
+            for i in range(0, len(top_mints), 100):
+                batch = top_mints[i:i+100]
+                
+                # Safely pull out just the text string from the dictionary
+                batch_ids = []
+                for item in batch:
+                    if isinstance(item, dict):
+                        mint = item.get('id') or item.get('address')
+                        if mint: batch_ids.append(str(mint))
+                    else:
+                        batch_ids.append(str(item))
+                
+                if not batch_ids: continue
+                
+                # Now the join() will work perfectly!
+                search_url = f"https://api.jup.ag/tokens/v2/search?query={','.join(batch_ids)}"
+                res = requests.get(search_url, headers=headers, timeout=15)
+                
+                if res.status_code == 200:
+                    tokens_info = res.json()
+                    for t in tokens_info:
+                        discovered.append({
+                            "address": t.get('id') or t.get('address'),
+                            "name": t.get('name', 'Unknown'),
+                            "symbol": t.get('symbol', 'Unknown'),
+                            "mcap": 0,
+                            "liquidity": 0,
+                            "last_alert_ts": 0
+                        })
+                time.sleep(0.5) # Anti-rate limit
             
         if discovered:
             supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
