@@ -91,34 +91,24 @@ def check_for_drops():
         "x-api-key": JUPITER_API_KEY
     }
 
-    # 1. FETCH PRICES (Using the precise V3 mapping)
-    for i in range(0, len(addrs), 50): 
-        batch = addrs[i:i+50]
-        try:
-            r = requests.get(f"https://api.jup.ag/price/v3?ids={','.join(batch)}", headers=headers, timeout=15)
+    # 1. FETCH PRICES (Jupiter V3 Universal Parser)
+if r.status_code == 200:
+    resp_json = r.json()
+    
+    # Handle the 'data' wrapper
+    data = resp_json.get("data", {})
+    
+    for addr, info in data.items():
+        if info:
+            # Jupiter V3 uses 'usdPrice' as the official field
+            # We also check 'price' as a fallback for certain token types
+            raw_price = info.get("usdPrice") or info.get("price")
             
-            if r.status_code == 200:
-                resp_json = r.json()
-                # Handle both wrapped 'data' and flat JSON responses
-                data = resp_json.get("data", resp_json)
-                
-                for addr, info in data.items():
-                    # Check every possible price key for V3 compatibility
-                    price_val = info.get("usdPrice") or info.get("price")
-                    if price_val:
-                        current_prices[addr] = float(price_val)
+            if raw_price is not None:
+                current_prices[addr] = float(raw_price)
             else:
-                print(f"⚠️ Jupiter V3 Error: {r.status_code} at batch {i//50}", flush=True)
-        except Exception as e:
-            print(f"❌ Price Request Failed: {e}", flush=True)
-        time.sleep(0.3) 
-
-    if not current_prices:
-        print("❌ Failed to fetch any prices. Skipping update.", flush=True)
-        return
-
-    print(f"✅ Fetched {len(current_prices)} prices. Saving to Supabase...", flush=True)
-
+                # If a price is null, Jupiter likely flagged it as unreliable
+                print(f"⚠️ Price unavailable for {addr} (Low liquidity/Suspected manipulation)")
     # 2. LOG PRICES & CALCULATE MCAP
     price_logs = []
     for t in tokens:
