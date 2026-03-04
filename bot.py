@@ -40,10 +40,10 @@ def sync_tokens():
             return
             
         all_tokens = r.json()
-        print(f"✅ Found {len(all_tokens)} verified tokens. Saving Top 1000...", flush=True)
+        print(f"✅ Found {len(all_tokens)} verified tokens. Saving Top 1500...", flush=True)
         
         discovered = []
-        for t in all_tokens[:1000]:
+        for t in all_tokens[:1500]:
             if isinstance(t, str):
                 address = t
                 name = "Unknown"
