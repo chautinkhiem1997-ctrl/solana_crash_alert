@@ -84,7 +84,6 @@ def check_for_drops():
     now = int(time.time())
     current_prices = {}
 
-    # --- THE FIX: Add the disguise headers! ---
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "application/json"
@@ -100,11 +99,9 @@ def check_for_drops():
                 for addr, info in data.items():
                     if info: current_prices[addr] = float(info.get("price", 0))
             else:
-                # No more sweeping errors under the rug!
                 print(f"⚠️ Jupiter Price Blocked: {r.status_code}", flush=True)
         except Exception as e:
             print(f"❌ Price Request Failed: {e}", flush=True)
-            
         time.sleep(0.2)
 
     if not current_prices:
@@ -119,14 +116,27 @@ def check_for_drops():
         curr_p = current_prices.get(addr)
         if not curr_p: continue
 
-        # Update Market Cap if it's missing (Price * Supply)
-        if t.get('mcap') == 0:
+        # --- THE FIX: Stop hiding errors and add a speed bump ---
+        if t.get('mcap') == 0 or t.get('mcap') is None:
             try:
                 supply_res = solana.get_token_supply(Pubkey.from_string(addr))
-                supply = supply_res.value.ui_amount or 0
+                
+                # Safely extract the token supply amount
+                if hasattr(supply_res, 'value') and supply_res.value:
+                    supply = supply_res.value.ui_amount or 0
+                else:
+                    supply = 0
+                    
                 t['mcap'] = curr_p * supply
                 supabase.table("tokens").update({"mcap": t['mcap']}).eq("address", addr).execute()
-            except: pass
+                print(f"💰 {t['symbol']} MCAP updated: ${t['mcap']:,.0f}", flush=True)
+                
+                # SPEED BUMP: Prevents the RPC server from blocking us for spam
+                time.sleep(0.1) 
+                
+            except Exception as e: 
+                # NOW it will tell us exactly WHY it is failing!
+                print(f"❌ MCAP Error for {t['symbol']}: {e}", flush=True)
 
         # Log price history
         supabase.table("prices").insert({"address": addr, "ts": now, "price": curr_p}).execute()
