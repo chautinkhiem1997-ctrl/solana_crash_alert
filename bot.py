@@ -153,8 +153,11 @@ def check_for_drops():
                     break 
 
     # Cleanup history older than 3h
-    supabase.table("prices").delete().lt("ts", now - 10800).execute()
-    print("✅ Price check and database update complete!", flush=True)
+# Log price history with error checking
+        try:
+            supabase.table("prices").insert({"address": addr, "ts": now, "price": curr_p}).execute()
+        except Exception as e:
+            print(f"❌ SUPABASE REJECTED PRICE FOR {t['symbol']}: {e}", flush=True)
 
 def send_alert(t, drop, price):
     mcap_display = f"${t['mcap']/1e6:.2f}M" if t.get('mcap', 0) > 0 else "N/A"
