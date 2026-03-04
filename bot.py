@@ -91,7 +91,7 @@ def check_for_drops():
         "x-api-key": JUPITER_API_KEY
     }
 
-    # 1. FETCH PRICES (Using the new V3 Endpoint)
+   # 1. FETCH PRICES (Using the precise V3 data mapping)
     for i in range(0, len(addrs), 50): 
         batch = addrs[i:i+50]
         try:
@@ -100,21 +100,17 @@ def check_for_drops():
             if r.status_code == 200:
                 resp_json = r.json()
                 data = resp_json.get("data", {})
+                
                 for addr, info in data.items():
-                    # THE FIX: V3 uses 'usdPrice' instead of 'price'
-                    if info and "usdPrice" in info:
-                        current_prices[addr] = float(info["usdPrice"])
+                    # THE FIX: Jupiter V3 nests the price inside a 'price' key 
+                    # which is inside the token address key.
+                    if info and "price" in info:
+                        current_prices[addr] = float(info["price"])
             else:
                 print(f"⚠️ Jupiter V3 Error: {r.status_code}", flush=True)
         except Exception as e:
             print(f"❌ Price Request Failed: {e}", flush=True)
-        time.sleep(0.3) 
-
-    if not current_prices:
-        print("❌ Failed to fetch any prices. Skipping update.", flush=True)
-        return
-
-    print(f"✅ Fetched {len(current_prices)} prices. Syncing to Supabase...", flush=True)
+        time.sleep(0.3)
 
     # 2. CALCULATE MCAP & LOG PRICES
     price_logs = []
