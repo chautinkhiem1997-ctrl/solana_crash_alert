@@ -20,43 +20,55 @@ DROP_THRESHOLD = 0.30
 COOLDOWN_SECONDS = 1800     
 TIMEFRAMES = [5, 30, 60, 120]
 
+# --- CLOUD CONFIG ---
+# Make sure to add this near the top where your other keys are!
+JUPITER_API_KEY = os.environ.get("JUPITER_API_KEY")
+
 def sync_tokens():
-    print(f"[{datetime.now()}] 🔄 Fetching Jupiter Verified List...", flush=True)
+    print(f"[{datetime.now()}] 🔄 Fetching Jupiter Verified List (V2 API)...", flush=True)
     
-    # THE FIX: The new 2026 Master List URL (Notice the "s" in tokens)
-    url = "https://tokens.jup.ag/tokens?tags=verified"
-    
-    # THE FIX: Added 'Referer' which Jupiter's new API requires
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "application/json",
-        "Referer": "https://jup.ag/"
-    }
+    if not JUPITER_API_KEY:
+        print("❌ ERROR: Missing JUPITER_API_KEY in GitHub Secrets!", flush=True)
+        return
+
+    # 1. Get the list of ALL verified mint addresses
+    tag_url = "https://api.jup.ag/tokens/v2/tag?query=verified"
+    headers = {"x-api-key": JUPITER_API_KEY}
     
     try:
-        r = requests.get(url, headers=headers, timeout=30)
+        r = requests.get(tag_url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            print(f"❌ Jupiter API Blocked. Status: {r.status_code}", flush=True)
+            return
+            
+        all_mints = r.json()
+        print(f"✅ Found {len(all_mints)} verified mints. Fetching details for Top 1000...", flush=True)
         
-        if r.status_code == 200:
-            all_tokens = r.json()
-            discovered = []
+        discovered = []
+        top_mints = all_mints[:1000]
+        
+        # 2. Fetch the Name/Symbol for these mints in batches of 100
+        for i in range(0, len(top_mints), 100):
+            batch = top_mints[i:i+100]
+            search_url = f"https://api.jup.ag/tokens/v2/search?query={','.join(batch)}"
+            res = requests.get(search_url, headers=headers, timeout=15)
             
-            # Take top 1000 to keep the bot fast
-            for t in all_tokens[:1000]:
-                discovered.append({
-                    "address": t.get('address'),
-                    "name": t.get('name'),
-                    "symbol": t.get('symbol'),
-                    "mcap": 0,       
-                    "liquidity": 0,  
-                    "last_alert_ts": 0
-                })
+            if res.status_code == 200:
+                tokens_info = res.json()
+                for t in tokens_info:
+                    discovered.append({
+                        "address": t.get('id'), # V2 API uses 'id' instead of 'address'
+                        "name": t.get('name'),
+                        "symbol": t.get('symbol'),
+                        "mcap": 0,
+                        "liquidity": 0,
+                        "last_alert_ts": 0
+                    })
+            time.sleep(0.5) # Anti-rate limit
             
-            if discovered:
-                supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
-                print(f"✅ Sync Complete: {len(discovered)} verified tokens loaded into Supabase.", flush=True)
-        else:
-            print(f"❌ Jupiter API Error. Status Code: {r.status_code}", flush=True)
-            print(f"Raw Response: {r.text[:200]}", flush=True)
+        if discovered:
+            supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
+            print(f"✅ Sync Complete: {len(discovered)} verified tokens loaded into Supabase.", flush=True)
             
     except Exception as e:
         print(f"❌ Sync Error: {e}", flush=True)
