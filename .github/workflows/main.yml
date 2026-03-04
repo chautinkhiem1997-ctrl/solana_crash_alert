@@ -1,8 +1,8 @@
 name: Solana Crash Watchdog
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Runs every 5 minutes
-  workflow_dispatch:       # Allows you to click "Run workflow"
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -21,13 +21,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Debug - List Files
+        run: |
+          echo "Checking directory content:"
+          ls -R
+          echo "Checking bot.py content:"
+          head -n 5 bot.py
+
       - name: Run The Bot
         env:
-          PYTHONUNBUFFERED: 1
+          PYTHONUNBUFFERED: "1"  # This forces Python to show logs instantly
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           RPC_URL: ${{ secrets.RPC_URL }}
-          JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}  # <--- THIS IS THE NEW LINE
+          JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
         run: python bot.py
