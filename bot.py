@@ -26,6 +26,7 @@ def sync_tokens():
     headers = {"X-API-KEY": BIRDEYE_API_KEY, "x-chain": "solana"}
     
     discovered = []
+    total_processed = 0 # Counter for all tokens found across all pages
     
     for offset in range(0, TOTAL_MONITOR, 50):
         params = {
@@ -37,9 +38,12 @@ def sync_tokens():
             r = requests.get(url, headers=headers, params=params, timeout=15)
             if r.status_code == 200:
                 items = r.json().get("data", {}).get("items", [])
+                
                 for item in items:
                     mcap_val = item.get("market_cap") or item.get("fdv") or 0
-                    discovered.append({
+                    
+                    # Create the token data
+                    new_token = {
                         "address": item.get("address"),
                         "name": item.get("name"),
                         "symbol": item.get("symbol"),
@@ -47,29 +51,33 @@ def sync_tokens():
                         "v24h": float(item.get("v24h") or 0),
                         "liquidity": float(item.get("liquidity") or 0),
                         "last_alert_ts": 0
-                    })
-                
-                # BATCH SAVING: Save every 500 tokens so we don't lose progress
-                if len(discovered) >= 500:
-                    print(f"📦 Saving batch of {len(discovered)} to Supabase...", flush=True)
-                    supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
-                    discovered = [] # Clear the list for the next batch
+                    }
                     
-                print(f"  > Progress: {offset + 50}/{TOTAL_MONITOR} fetched", flush=True)
-            else:
-                print(f"⚠️ Birdeye API Error {r.status_code}: {r.text}")
+                    discovered.append(new_token)
+                    total_processed += 1
+                    
+                    # LIVE COUNTER: This prints for EVERY token found
+                    print(f"   [+] Added {new_token['symbol']} to list. (Total: {total_processed})", flush=True)
+                
+                # BATCH SAVING: Save every 500 tokens to keep the database updated
+                if len(discovered) >= 500:
+                    print(f"📦 DB SYNC: Saving batch of {len(discovered)} to Supabase...", flush=True)
+                    supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
+                    discovered = [] 
+                    
+                print(f"--- Page at Offset {offset} Finished ---", flush=True)
             
             time.sleep(0.5) # Anti-rate limit
         except Exception as e:
-            print(f"❌ Sync Error at offset {offset}: {e}")
+            print(f"❌ ERROR at offset {offset}: {e}")
             break
 
-    # Final save for any remaining tokens
+    # Save any remaining tokens that didn't make a full batch of 500
     if discovered:
-        print(f"📦 Saving final batch of {len(discovered)}...", flush=True)
+        print(f"📦 DB SYNC: Saving final batch of {len(discovered)}...", flush=True)
         supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
 
-    print(f"✅ Sync Phase Complete.", flush=True)
+    print(f"✅ Sync Phase Complete. Total Tokens Found: {total_processed}", flush=True)
 
 def check_for_drops():
     print(f"\n[{datetime.now()}] 📈 Checking Prices for Drops...", flush=True)
