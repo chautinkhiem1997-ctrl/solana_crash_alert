@@ -91,24 +91,30 @@ def check_for_drops():
         "x-api-key": JUPITER_API_KEY
     }
 
-    # 1. FETCH PRICES (Jupiter V3 Universal Parser)
-if r.status_code == 200:
-    resp_json = r.json()
-    
-    # Handle the 'data' wrapper
-    data = resp_json.get("data", {})
-    
-    for addr, info in data.items():
-        if info:
-            # Jupiter V3 uses 'usdPrice' as the official field
-            # We also check 'price' as a fallback for certain token types
-            raw_price = info.get("usdPrice") or info.get("price")
+   # 1. FETCH PRICES (Jupiter V3)
+    for i in range(0, len(addrs), 50): 
+        batch = addrs[i:i+50]
+        try:
+            # We define 'r' right here
+            r = requests.get(f"https://api.jup.ag/price/v3?ids={','.join(batch)}", headers=headers, timeout=15)
             
-            if raw_price is not None:
-                current_prices[addr] = float(raw_price)
+            # This MUST be indented inside the 'try' block so it can see 'r'
+            if r.status_code == 200:
+                resp_json = r.json()
+                data = resp_json.get("data", resp_json)
+                for addr, info in data.items():
+                    price_val = info.get("usdPrice") or info.get("price")
+                    if price_val:
+                        current_prices[addr] = float(price_val)
             else:
-                # If a price is null, Jupiter likely flagged it as unreliable
-                print(f"⚠️ Price unavailable for {addr} (Low liquidity/Suspected manipulation)")
+                print(f"⚠️ Jupiter V3 Error: {r.status_code}", flush=True)
+                
+        except Exception as e:
+            # If the request fails entirely, 'r' is never created, 
+            # so we handle the error here instead of checking r.status_code
+            print(f"❌ Price Request Failed: {e}", flush=True)
+        
+        time.sleep(0.3)
     # 2. LOG PRICES & CALCULATE MCAP
     price_logs = []
     for t in tokens:
