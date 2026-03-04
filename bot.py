@@ -22,29 +22,43 @@ TIMEFRAMES = [5, 30, 60, 120]
 
 def sync_tokens():
     print(f"[{datetime.now()}] 🔄 Fetching Jupiter Verified List...", flush=True)
-    url = "https://api.jup.ag/tokens/v1/tagged/verified"
+    # Using the official public Strict List
+    url = "https://token.jup.ag/strict"
+    
+    # The "Disguise" - This stops Cloudflare from blocking GitHub Actions
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json"
+    }
     
     try:
-        r = requests.get(url, timeout=30)
+        r = requests.get(url, headers=headers, timeout=30)
+        
         if r.status_code == 200:
             all_tokens = r.json()
-            # We take the top 1000 verified tokens to keep the monitor fast
             discovered = []
+            
+            # Take top 1000 to keep the bot fast
             for t in all_tokens[:1000]:
                 discovered.append({
-                    "address": t['address'],
-                    "name": t['name'],
-                    "symbol": t['symbol'],
-                    "mcap": 0,       # Initialized at 0, updated in price check
-                    "liquidity": 0,  # Stays 0 as Jup doesn't provide this easily
+                    "address": t.get('address'),
+                    "name": t.get('name'),
+                    "symbol": t.get('symbol'),
+                    "mcap": 0,       
+                    "liquidity": 0,  
                     "last_alert_ts": 0
                 })
             
             if discovered:
                 supabase.table("tokens").upsert(discovered, on_conflict="address").execute()
-                print(f"✅ Sync Complete: {len(discovered)} verified tokens loaded.")
+                print(f"✅ Sync Complete: {len(discovered)} verified tokens loaded into Supabase.", flush=True)
+        else:
+            # If it fails, this will now ACTUALLY tell us why!
+            print(f"❌ Jupiter API Blocked us. Status Code: {r.status_code}", flush=True)
+            print(f"Raw Response: {r.text[:200]}", flush=True)
+            
     except Exception as e:
-        print(f"❌ Sync Error: {e}")
+        print(f"❌ Sync Error: {e}", flush=True)
 
 def check_for_drops():
     print(f"\n[{datetime.now()}] 📈 Checking Prices via Jupiter...", flush=True)
