@@ -29,4 +29,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           RPC_URL: ${{ secrets.RPC_URL }}
+          JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}  # <--- THIS IS THE NEW LINE
         run: python bot.py
