@@ -5,6 +5,8 @@ from solana.rpc.api import Client as SolanaClient
 from solders.pubkey import Pubkey
 import telebot
 
+print("🚀 BOT SCRIPT STARTED", flush=True)
+
 # --- CONFIG ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -42,7 +44,6 @@ def sync_tokens():
         
         discovered = []
         for t in all_tokens[:1000]:
-            # This makes the bot invincible whether Jupiter sends text or dictionaries
             if isinstance(t, str):
                 address = t
                 name = "Unknown"
@@ -84,14 +85,13 @@ def check_for_drops():
     now = int(time.time())
     current_prices = {}
 
-    # --- THE FIX: We added the VIP Pass (x-api-key) ---
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "application/json",
-        "x-api-key": JUPITER_API_KEY  # <--- THIS WAS MISSING!
+        "x-api-key": JUPITER_API_KEY
     }
 
-    # 1. FETCH PRICES (Jupiter v2 API)
+    # 1. FETCH PRICES
     for i in range(0, len(addrs), 100):
         batch = addrs[i:i+100]
         try:
@@ -118,11 +118,10 @@ def check_for_drops():
         curr_p = current_prices.get(addr)
         if not curr_p: continue
 
-        # Update Market Cap if it's missing (Price * Supply)
+        # Update Market Cap if missing
         if t.get('mcap') == 0 or t.get('mcap') is None:
             try:
                 supply_res = solana.get_token_supply(Pubkey.from_string(addr))
-                
                 if hasattr(supply_res, 'value') and supply_res.value:
                     supply = supply_res.value.ui_amount or 0
                 else:
@@ -131,9 +130,7 @@ def check_for_drops():
                 t['mcap'] = curr_p * supply
                 supabase.table("tokens").update({"mcap": t['mcap']}).eq("address", addr).execute()
                 print(f"💰 {t['symbol']} MCAP updated: ${t['mcap']:,.0f}", flush=True)
-                
-                time.sleep(0.1) # Speed bump to protect your RPC URL
-                
+                time.sleep(0.1) 
             except Exception as e: 
                 print(f"❌ MCAP Error for {t['symbol']}: {e}", flush=True)
 
@@ -158,6 +155,7 @@ def check_for_drops():
     # Cleanup history older than 3h
     supabase.table("prices").delete().lt("ts", now - 10800).execute()
     print("✅ Price check and database update complete!", flush=True)
+
 def send_alert(t, drop, price):
     mcap_display = f"${t['mcap']/1e6:.2f}M" if t.get('mcap', 0) > 0 else "N/A"
     msg = (
@@ -172,6 +170,9 @@ def send_alert(t, drop, price):
     try: telebot.TeleBot(TELEGRAM_TOKEN).send_message(CHAT_ID, msg, parse_mode='Markdown')
     except: pass
 
+# --- THE IGNITION SWITCH (Do not delete this!) ---
 if __name__ == "__main__":
+    print("⚙️ EXECUTING FUNCTIONS...", flush=True)
     sync_tokens()
     check_for_drops()
+    print("🏁 SCRIPT FINISHED COMPLETELY", flush=True)
