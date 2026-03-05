@@ -1,7 +1,5 @@
+streamlit
+pandas
+supabase
 requests
 pyTelegramBotAPI
-supabase
-pandas
-streamlit
-solana
-solders
