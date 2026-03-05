@@ -21,7 +21,7 @@ solana = SolanaClient(RPC_URL)
 # --- SETTINGS ---
 DROP_THRESHOLD = 0.30       
 COOLDOWN_SECONDS = 1800     
-TIMEFRAMES = [5, 10, 30, 60, 120, 180]
+TIMEFRAMES = [15, 30, 60, 120, 180]
 
 def sync_tokens():
     print(f"[{datetime.now()}] 🔄 Fetching Jupiter Verified List (V2 API)...", flush=True)
@@ -180,7 +180,7 @@ def check_for_drops():
             cutoff = now - (minutes * 60)
             
             # Look through the history we already downloaded locally
-            valid_prices = [h for h in history if (cutoff - 300) <= h['ts'] <= (cutoff + 300)]
+            valid_prices = [h for h in history if (cutoff - 900) <= h['ts'] <= (cutoff + 900)]
             
             if valid_prices:
                 # Find the price timestamp closest to our exact target timeframe
