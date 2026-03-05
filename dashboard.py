@@ -97,24 +97,28 @@ if tokens:
     tabs = st.tabs(["📋 Token Tracker", "📉 Crash Alerts"])
     
     with tabs[0]:
-        # The new row limit selector
-        row_limit = st.selectbox("Tokens to display:", [10, 20, 50, 100, 1000], index=1) # index=1 makes 20 the default
-        
-        # Apply the row limit and create a display copy
+        row_limit = st.selectbox("Tokens to display:", [10, 20, 50, 100, 1000], index=1)
         display_df = filtered_df.head(row_limit)[['symbol', 'name', 'mcap', 'address']].copy()
-        
-        # Format the Market Cap to include commas!
         display_df['mcap'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
+
+        # 🔥 THE URL HACK: Turn symbol into a DexScreener link, but hide the symbol after a '#'
+        display_df['symbol'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
 
         st.dataframe(
             display_df,
             column_config={
-                "symbol": st.column_config.TextColumn("Ticker", width="small"),
+                "symbol": st.column_config.LinkColumn(
+                    "Ticker", 
+                    display_text=r"https://.*?#(.*)$", # Extracts ONLY the symbol after the # to display it
+                    width="small"
+                ),
                 "name": "Token Name",
                 "mcap": st.column_config.TextColumn("Market Cap"), 
                 "address": st.column_config.TextColumn("Contract Address", width="medium"),
             },
-            width="stretch", hide_index=True
+            width="stretch", 
+            height=800,
+            hide_index=True
         )
 
     with tabs[1]:
