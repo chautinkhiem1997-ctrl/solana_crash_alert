@@ -1,8 +1,6 @@
 import os, requests, time
 from datetime import datetime
 from supabase import create_client, Client
-from solana.rpc.api import Client as SolanaClient
-from solders.pubkey import Pubkey
 import telebot
 
 print("🚀 BOT SCRIPT STARTED", flush=True)
@@ -12,11 +10,9 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-RPC_URL = os.environ.get("RPC_URL", "https://api.mainnet-beta.solana.com")
 JUPITER_API_KEY = os.environ.get("JUPITER_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-solana = SolanaClient(RPC_URL)
 
 # --- SETTINGS ---
 DROP_THRESHOLD = 0.30       
@@ -91,7 +87,7 @@ def check_for_drops():
         "x-api-key": JUPITER_API_KEY
     }
 
-   # 1. FETCH PRICES (Jupiter V3)
+    # 1. FETCH PRICES (Jupiter V3)
     for i in range(0, len(addrs), 50): 
         batch = addrs[i:i+50]
         try:
@@ -112,34 +108,53 @@ def check_for_drops():
         
         time.sleep(0.3)
 
-# 2. LOG PRICES & CALCULATE MCAP
+    # 2. FAST MARKET CAP SYNC (DexScreener API)
+    tokens_needing_mcap = [t for t in tokens if not t.get('mcap')]
+    if tokens_needing_mcap:
+        print(f"📊 Fetching missing Market Caps for {len(tokens_needing_mcap)} tokens via DexScreener...", flush=True)
+        # Process in batches of 30 (Dexscreener limit)
+        for i in range(0, len(tokens_needing_mcap), 30):
+            batch = tokens_needing_mcap[i:i+30]
+            batch_addrs = [t['address'] for t in batch]
+            
+            try:
+                # Ask DexScreener for all 30 tokens at once
+                r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{','.join(batch_addrs)}", timeout=15)
+                if r.status_code == 200:
+                    pairs = r.json().get('pairs', [])
+                    
+                    # Map the address to the highest Market Cap found
+                    mcap_map = {}
+                    for pair in pairs:
+                        base_addr = pair.get('baseToken', {}).get('address')
+                        # Dexscreener uses 'fdv' (Fully Diluted Valuation) or 'marketCap'
+                        mcap = pair.get('marketCap') or pair.get('fdv') or 0
+                        
+                        # Only keep the biggest liquidity pool's market cap
+                        if base_addr and mcap > mcap_map.get(base_addr, 0):
+                            mcap_map[base_addr] = mcap
+
+                    # Update Supabase
+                    for t in batch:
+                        addr = t['address']
+                        if addr in mcap_map and mcap_map[addr] > 0:
+                            t['mcap'] = mcap_map[addr]
+                            supabase.table("tokens").update({"mcap": t['mcap']}).eq("address", addr).execute()
+                            print(f"✅ Found MCAP for {t['symbol']}: ${t['mcap']:,.0f}", flush=True)
+                            
+            except Exception as e:
+                pass # If DexScreener glitches, just skip and try again next run
+                
+            time.sleep(0.5) # Be polite to DexScreener's servers
+
+    # 3. LOG PRICES TO DATABASE
     price_logs = []
-    mcap_updates_this_run = 0  # 🛑 THE THROTTLE: Keeps the bot from hanging
-    
     for t in tokens:
         addr = t['address']
         curr_p = current_prices.get(addr)
-        if not curr_p: continue
+        if curr_p:
+            price_logs.append({"address": addr, "ts": now, "price": curr_p})
 
-        # Market Cap Calculation (Throttled to 50 per run)
-        if t.get('mcap') == 0 or t.get('mcap') is None:
-            if mcap_updates_this_run < 50:
-                try:
-                    supply_res = solana.get_token_supply(Pubkey.from_string(addr))
-                    if hasattr(supply_res, 'value') and supply_res.value:
-                        supply = supply_res.value.ui_amount or 0
-                        t['mcap'] = curr_p * supply
-                        supabase.table("tokens").update({"mcap": t['mcap']}).eq("address", addr).execute()
-                        mcap_updates_this_run += 1
-                        print(f"✅ Updated MCAP for {t['symbol']}", flush=True)
-                    time.sleep(0.2) 
-                except Exception as e: 
-                    pass 
-
-        # Prepare bulk insert for price table
-        price_logs.append({"address": addr, "ts": now, "price": curr_p})
-
-    # Save to prices table
     if price_logs:
         try:
             supabase.table("prices").insert(price_logs).execute()
@@ -147,13 +162,9 @@ def check_for_drops():
         except Exception as e:
             print(f"❌ Supabase Insert Error: {e}", flush=True)
 
-    # 3. CRASH DETECTION (Compares current price to history)
-    # ... (the rest of your script stays the same) ...
-
-# 3. CRASH DETECTION (Optimized for Speed)
+    # 4. CRASH DETECTION (Optimized for Speed)
     print("🔍 Calculating price drops...", flush=True)
     
-    # We look back 3 hours and 5 minutes (11100 seconds)
     max_lookback = now - 11100 
 
     for t in tokens:
@@ -161,12 +172,10 @@ def check_for_drops():
         curr_p = current_prices.get(addr)
         if not curr_p: continue
 
-        # Check if we are still in the 30-minute cooldown window
         last_alert = t.get('last_alert_ts') or 0
         if (now - last_alert) < COOLDOWN_SECONDS: 
             continue 
 
-        # 🔥 FAST FETCH: Get ALL history for this token in ONE database call instead of 6
         try:
             history_res = supabase.table("prices").select("ts, price").eq("address", addr).gte("ts", max_lookback).execute()
             history = history_res.data
@@ -179,24 +188,21 @@ def check_for_drops():
         for minutes in TIMEFRAMES:
             cutoff = now - (minutes * 60)
             
-            # Look through the history we already downloaded locally
             valid_prices = [h for h in history if (cutoff - 900) <= h['ts'] <= (cutoff + 900)]
             
             if valid_prices:
-                # Find the price timestamp closest to our exact target timeframe
                 closest = min(valid_prices, key=lambda x: abs(x['ts'] - cutoff))
                 old_p = closest['price']
                 
                 if old_p <= 0: continue 
                 
-                # Math: (Old - New) / Old
                 drop = (old_p - curr_p) / old_p
                 
                 if drop >= DROP_THRESHOLD:
                     send_alert(t, drop, curr_p, minutes)
                     supabase.table("tokens").update({"last_alert_ts": now}).eq("address", addr).execute()
                     print(f"🚨 ALERT FIRED: {t['symbol']} dropped {drop*100:.1f}% in {minutes}m", flush=True)
-                    break # Stop checking other timeframes to avoid spamming multiple alerts
+                    break 
 
     # Cleanup history older than 4 hours (14400 sec)
     try:
@@ -219,7 +225,6 @@ def send_alert(t, drop, price, minutes):
     try: telebot.TeleBot(TELEGRAM_TOKEN).send_message(CHAT_ID, msg, parse_mode='Markdown')
     except: pass
 
-# --- THE IGNITION SWITCH (Do not delete this!) ---
 if __name__ == "__main__":
     print("⚙️ EXECUTING FUNCTIONS...", flush=True)
     sync_tokens()
