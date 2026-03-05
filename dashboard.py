@@ -12,12 +12,58 @@ URL = st.secrets["SUPABASE_URL"]
 KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(URL, KEY)
 
-# --- 3. PRO UI STYLING ---
+# --- 3. HIGH-TECH TERMINAL STYLING ---
 st.markdown("""
     <style>
-    .stApp { background-color: #0b0e11; color: #ffffff; }
-    [data-testid="stMetric"] { background-color: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 12px; }
-    [data-testid="stDataFrame"] { border: 1px solid #30363d; border-radius: 10px; }
+    /* Import a cool hacker-style font from Google */
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+    /* The Main Background: Dark with a subtle green radial glow and grid pattern */
+    .stApp { 
+        background-color: #050505;
+        background-image: 
+            radial-gradient(circle at 50% 0%, #002200 0%, transparent 70%),
+            linear-gradient(rgba(0, 255, 65, 0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0, 255, 65, 0.03) 1px, transparent 1px);
+        background-size: 100% 100%, 30px 30px, 30px 30px;
+        color: #00ff41; 
+        font-family: 'Share Tech Mono', monospace;
+    }
+
+    /* Style the Metric Boxes (Tracked Tokens, etc.) with a neon glow */
+    [data-testid="stMetric"] { 
+        background-color: rgba(10, 10, 10, 0.8); 
+        border: 1px solid #00ff41; 
+        padding: 15px; 
+        border-radius: 5px; 
+        box-shadow: 0px 0px 10px rgba(0, 255, 65, 0.2);
+    }
+    
+    /* Make the metrics text glow */
+    [data-testid="stMetricValue"] {
+        color: #00ff41 !important;
+        text-shadow: 0px 0px 8px rgba(0, 255, 65, 0.6);
+    }
+
+    /* Style the Data Tables */
+    [data-testid="stDataFrame"] { 
+        border: 1px solid #00ff41; 
+        border-radius: 5px; 
+        box-shadow: 0px 0px 15px rgba(0, 255, 65, 0.1);
+    }
+
+    /* Make all Headers glowing neon green */
+    h1, h2, h3 {
+        color: #00ff41 !important;
+        text-shadow: 0px 0px 10px rgba(0, 255, 65, 0.5);
+        font-family: 'Share Tech Mono', monospace;
+    }
+    
+    /* Style the Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: rgba(5, 5, 5, 0.95);
+        border-right: 1px solid #00ff41;
+    }
     </style>
 """, unsafe_allow_html=True)
 
