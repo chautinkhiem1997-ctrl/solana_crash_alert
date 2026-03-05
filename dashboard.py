@@ -113,7 +113,7 @@ if tokens:
     st.divider()
     tabs = st.tabs(["📋 Token List", "📉 Recent Crashes"])
     
-    with tabs[0]:
+with tabs[0]:
         st.dataframe(
             filtered_df[['symbol', 'name', 'mcap', 'address']],
             column_config={
@@ -122,9 +122,8 @@ if tokens:
                 "mcap": st.column_config.NumberColumn("Market Cap", format="$%d"),
                 "address": st.column_config.TextColumn("Contract Address", width="medium"),
             },
-            use_container_width=True, hide_index=True
+            width="stretch", hide_index=True
         )
-
     with tabs[1]:
         st.subheader("🚨 Recent Token Crashes")
         crashed_tokens = supabase.table("tokens").select("address, symbol, name, last_alert_ts").gt("last_alert_ts", 0).order("last_alert_ts", desc=True).execute().data
