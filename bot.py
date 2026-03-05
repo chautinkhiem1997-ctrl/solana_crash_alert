@@ -112,23 +112,29 @@ def check_for_drops():
         
         time.sleep(0.3)
 
-    # 2. LOG PRICES & CALCULATE MCAP
+# 2. LOG PRICES & CALCULATE MCAP
     price_logs = []
+    mcap_updates_this_run = 0  # 🛑 THE THROTTLE: Keeps the bot from hanging
+    
     for t in tokens:
         addr = t['address']
         curr_p = current_prices.get(addr)
         if not curr_p: continue
 
-        # Market Cap Calculation
+        # Market Cap Calculation (Throttled to 50 per run)
         if t.get('mcap') == 0 or t.get('mcap') is None:
-            try:
-                supply_res = solana.get_token_supply(Pubkey.from_string(addr))
-                if hasattr(supply_res, 'value') and supply_res.value:
-                    supply = supply_res.value.ui_amount or 0
-                    t['mcap'] = curr_p * supply
-                    supabase.table("tokens").update({"mcap": t['mcap']}).eq("address", addr).execute()
-                time.sleep(0.1) 
-            except: pass
+            if mcap_updates_this_run < 50:
+                try:
+                    supply_res = solana.get_token_supply(Pubkey.from_string(addr))
+                    if hasattr(supply_res, 'value') and supply_res.value:
+                        supply = supply_res.value.ui_amount or 0
+                        t['mcap'] = curr_p * supply
+                        supabase.table("tokens").update({"mcap": t['mcap']}).eq("address", addr).execute()
+                        mcap_updates_this_run += 1
+                        print(f"✅ Updated MCAP for {t['symbol']}", flush=True)
+                    time.sleep(0.2) 
+                except Exception as e: 
+                    pass 
 
         # Prepare bulk insert for price table
         price_logs.append({"address": addr, "ts": now, "price": curr_p})
@@ -140,6 +146,9 @@ def check_for_drops():
             print(f"💾 Successfully saved {len(price_logs)} new entries to 'prices' table.", flush=True)
         except Exception as e:
             print(f"❌ Supabase Insert Error: {e}", flush=True)
+
+    # 3. CRASH DETECTION (Compares current price to history)
+    # ... (the rest of your script stays the same) ...
 
     # 3. CRASH DETECTION (Compares current price to history)
     print("🔍 Calculating price drops...", flush=True)
