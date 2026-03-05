@@ -150,8 +150,12 @@ def check_for_drops():
     # 3. CRASH DETECTION (Compares current price to history)
     # ... (the rest of your script stays the same) ...
 
-    # 3. CRASH DETECTION (Compares current price to history)
+# 3. CRASH DETECTION (Optimized for Speed)
     print("🔍 Calculating price drops...", flush=True)
+    
+    # We look back 3 hours and 5 minutes (11100 seconds)
+    max_lookback = now - 11100 
+
     for t in tokens:
         addr = t['address']
         curr_p = current_prices.get(addr)
@@ -162,15 +166,28 @@ def check_for_drops():
         if (now - last_alert) < COOLDOWN_SECONDS: 
             continue 
 
+        # 🔥 FAST FETCH: Get ALL history for this token in ONE database call instead of 6
+        try:
+            history_res = supabase.table("prices").select("ts, price").eq("address", addr).gte("ts", max_lookback).execute()
+            history = history_res.data
+        except Exception:
+            history = []
+            
+        if not history:
+            continue
+
         for minutes in TIMEFRAMES:
             cutoff = now - (minutes * 60)
             
-            # Find a price from exactly 'minutes' ago (gives a 5-minute grace window)
-            old_res = supabase.table("prices").select("price").eq("address", addr).gte("ts", cutoff - 300).lte("ts", cutoff + 300).order("ts", desc=False).limit(1).execute().data
+            # Look through the history we already downloaded locally
+            valid_prices = [h for h in history if (cutoff - 300) <= h['ts'] <= (cutoff + 300)]
             
-            if old_res:
-                old_p = old_res[0]['price']
-                if old_p <= 0: continue # Prevent division by zero
+            if valid_prices:
+                # Find the price timestamp closest to our exact target timeframe
+                closest = min(valid_prices, key=lambda x: abs(x['ts'] - cutoff))
+                old_p = closest['price']
+                
+                if old_p <= 0: continue 
                 
                 # Math: (Old - New) / Old
                 drop = (old_p - curr_p) / old_p
@@ -181,8 +198,11 @@ def check_for_drops():
                     print(f"🚨 ALERT FIRED: {t['symbol']} dropped {drop*100:.1f}% in {minutes}m", flush=True)
                     break # Stop checking other timeframes to avoid spamming multiple alerts
 
-    # Cleanup history older than 4 hours (14400 sec) so we don't delete the 180m data!
-    supabase.table("prices").delete().lt("ts", now - 14400).execute()
+    # Cleanup history older than 4 hours (14400 sec)
+    try:
+        supabase.table("prices").delete().lt("ts", now - 14400).execute()
+    except: pass
+    
     print("🏁 Price check cycle complete!", flush=True)
 
 def send_alert(t, drop, price, minutes):
