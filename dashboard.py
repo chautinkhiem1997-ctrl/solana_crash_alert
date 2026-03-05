@@ -75,13 +75,12 @@ def get_data():
         hour_ago = int(datetime.now().timestamp()) - 3600
         price_count = supabase.table("prices").select("address", count="exact").gte("ts", hour_ago).execute().count
         
-        # Sometimes count returns None if empty, so we ensure it's a number
+        # Ensure count is a number even if empty
         if price_count is None: 
             price_count = 0
             
         return tokens, price_count
     except Exception as e:
-        # 🚨 THIS will print the actual hidden error to your dashboard!
         st.error(f"🚨 Supabase Connection Error: {e}")
         return [], 0
 
@@ -113,7 +112,7 @@ if tokens:
     st.divider()
     tabs = st.tabs(["📋 Token List", "📉 Recent Crashes"])
     
-with tabs[0]:
+    with tabs[0]:
         st.dataframe(
             filtered_df[['symbol', 'name', 'mcap', 'address']],
             column_config={
@@ -124,6 +123,7 @@ with tabs[0]:
             },
             width="stretch", hide_index=True
         )
+
     with tabs[1]:
         st.subheader("🚨 Recent Token Crashes")
         crashed_tokens = supabase.table("tokens").select("address, symbol, name, last_alert_ts").gt("last_alert_ts", 0).order("last_alert_ts", desc=True).execute().data
@@ -141,7 +141,7 @@ with tabs[0]:
                 price_df = pd.DataFrame(prices_data)
                 price_df['created_at'] = pd.to_datetime(price_df['created_at'])
                 price_df.set_index('created_at', inplace=True)
-                st.line_chart(price_df['price'], color="#ff4b4b") 
+                st.line_chart(price_df['price'], color="#00ff41") 
             else:
                 st.warning("No price history available.")
 else:
