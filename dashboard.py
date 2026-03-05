@@ -25,8 +25,8 @@ st.markdown("""
         background-size: 100% 100%, 30px 30px, 30px 30px;
         color: #00ff41; font-family: 'Share Tech Mono', monospace;
     }
-    [data-testid="stMetric"] { background-color: rgba(10, 10, 10, 0.9); border: 1px solid #00ff41; padding: 15px; border-radius: 5px; box-shadow: 0px 0px 10px rgba(0, 255, 65, 0.15); }
-    [data-testid="stMetricValue"] { color: #00ff41 !important; text-shadow: 0px 0px 8px rgba(0, 255, 65, 0.5); }
+    [data-testid="stMetric"] { background-color: rgba(10, 10, 10, 0.9); border: 1px solid #00ff41; padding: 15px; border-radius: 5px; }
+    [data-testid="stMetricValue"] { color: #00ff41 !important; }
     h1, h2, h3, p, label { color: #00ff41 !important; font-family: 'Share Tech Mono', monospace; }
     [data-testid="stSidebar"] { background-color: rgba(5, 5, 5, 0.95); border-right: 1px solid #00ff41; }
     </style>
@@ -37,16 +37,19 @@ st.markdown("""
 def get_data():
     try:
         tokens = supabase.table("tokens").select("*").order("mcap", desc=True).execute().data
-        latest_prices = supabase.table("prices").select("address, price").order("created_at", desc=True).execute().data
+        latest_prices = supabase.table("prices").select("address, price, created_at").order("created_at", desc=True).limit(2000).execute().data
         price_map = {p['address']: p['price'] for p in latest_prices} if latest_prices else {}
-        hour_ago = int(datetime.now().timestamp()) - 3600
-        price_count = supabase.table("prices").select("address", count="exact").gte("ts", hour_ago).execute().count
-        return tokens, price_map, price_count if price_count else 0
+        last_update = latest_prices[0]['created_at'] if latest_prices else None
+        
+        # Health check
+        recent_ts = int(datetime.now().timestamp()) - 900 
+        price_count = supabase.table("prices").select("address", count="exact").gte("ts", recent_ts).execute().count
+        return tokens, price_map, (price_count if price_count else 0), last_update
     except Exception as e:
         st.error(f"🚨 Supabase Connection Error: {e}")
-        return [], {}, 0
+        return [], {}, 0, None
 
-tokens, price_map, health_stat = get_data()
+tokens, price_map, health_stat, last_ts = get_data()
 
 # --- 5. SIDEBAR ---
 with st.sidebar:
@@ -56,7 +59,8 @@ with st.sidebar:
     st.divider()
     st.write("### System Health")
     st.status("Bot: Active" if health_stat > 0 else "Bot: Offline", state="complete" if health_stat > 0 else "error")
-    st.write(f"Signals/hr: {health_stat}")
+    if last_ts:
+        st.caption(f"Last Update: {last_ts}")
 
 # --- 6. MAIN INTERFACE ---
 st.title("🛡️ Solana Sniper Command Center")
@@ -72,66 +76,49 @@ if tokens:
     m3.metric("Avg M-Cap", f"${avg_mcap/1e6:.1f}M")
 
     st.divider()
-    tabs = st.tabs(["📋 Token Tracker", "📉 Crash Alerts"])
     
-    with tabs[0]:
-        # --- PAGINATION & LIMIT CONTROLS ---
-        c1, c2, c3 = st.columns([2, 2, 4])
-        with c1:
-            batch_size_option = st.selectbox("Tokens per page:", [20, 50, 100, 1000, "All"], index=1)
-        
-        total_rows = len(filtered_df)
-        
-        if batch_size_option == "All":
-            batch_size = total_rows if total_rows > 0 else 1
-            total_pages = 1
-        else:
-            batch_size = int(batch_size_option)
-            total_pages = math.ceil(total_rows / batch_size) if total_rows > 0 else 1
+    # --- PAGINATION CONTROLS ---
+    c1, c2, c3 = st.columns([2, 2, 4])
+    with c1:
+        batch_size_option = st.selectbox("Tokens per page:", [20, 50, 100, 1000, "All"], index=1)
+    
+    total_rows = len(filtered_df)
+    if batch_size_option == "All":
+        batch_size = total_rows if total_rows > 0 else 1
+        total_pages = 1
+    else:
+        batch_size = int(batch_size_option)
+        total_pages = math.ceil(total_rows / batch_size) if total_rows > 0 else 1
 
-        with c2:
-            current_page = st.number_input(f"Page (1 of {total_pages})", min_value=1, max_value=total_pages, step=1)
+    with c2:
+        current_page = st.number_input(f"Page (1 of {total_pages})", min_value=1, max_value=total_pages, step=1)
 
-        # Calculate Batch Slice
-        start_idx = (current_page - 1) * batch_size
-        end_idx = start_idx + batch_size
-        display_df = filtered_df.iloc[start_idx:end_idx].copy()
-        
-        # Formatting
-        display_df['Price'] = display_df['address'].map(price_map).apply(lambda x: f"${x:.6f}" if pd.notnull(x) else "---")
-        display_df['mcap_fmt'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
-        display_df['symbol_link'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
+    # Slice data
+    start_idx = (current_page - 1) * batch_size
+    end_idx = start_idx + batch_size
+    display_df = filtered_df.iloc[start_idx:end_idx].copy()
+    
+    # Format
+    display_df['Price'] = display_df['address'].map(price_map).apply(lambda x: f"${x:.6f}" if pd.notnull(x) else "---")
+    display_df['mcap_fmt'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
+    display_df['symbol_link'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
 
-        # 🔥 FULL EXPANSION DISPLAY WITH CORRECT HEIGHT VALUE
-        st.dataframe(
-            display_df[['symbol_link', 'name', 'Price', 'mcap_fmt', 'address']],
-            column_config={
-                "symbol_link": st.column_config.LinkColumn("Ticker", display_text=r"https://.*?#(.*)$", width="small"),
-                "name": "Token Name",
-                "Price": "Current Price",
-                "mcap_fmt": "Market Cap",
-                "address": st.column_config.TextColumn("Contract Address", width="medium"),
-            },
-            width="stretch", 
-            height='content', # 🔥 Fixed: Replaces None to prevent StreamlitInvalidHeightError
-            hide_index=True
-        )
+    # 🔥 Table expands to fit the content exactly
+    st.dataframe(
+        display_df[['symbol_link', 'name', 'Price', 'mcap_fmt', 'address']],
+        column_config={
+            "symbol_link": st.column_config.LinkColumn("Ticker", display_text=r"https://.*?#(.*)$", width="small"),
+            "name": "Token Name",
+            "Price": "Current Price",
+            "mcap_fmt": "Market Cap",
+            "address": st.column_config.TextColumn("Contract Address", width="medium"),
+        },
+        width="stretch", 
+        height='content', 
+        hide_index=True
+    )
 
-        st.write(f"📊 Showing tokens {start_idx + 1} to {min(end_idx, total_rows)} of {total_rows}")
-
-    with tabs[1]:
-        st.subheader("🚨 Recent Token Crashes")
-        crashed_tokens = supabase.table("tokens").select("address, symbol, name, last_alert_ts").gt("last_alert_ts", 0).order("last_alert_ts", desc=True).execute().data
-        if not crashed_tokens:
-            st.info("✅ No crashes detected!")
-        else:
-            token_options = {f"{t['symbol']} - {t['name']}": t['address'] for t in crashed_tokens}
-            sel_label = st.selectbox("Select crash history:", list(token_options.keys()))
-            prices_data = supabase.table("prices").select("price, created_at").eq("address", token_options[sel_label]).order("created_at", desc=False).execute().data
-            if prices_data:
-                p_df = pd.DataFrame(prices_data)
-                p_df['created_at'] = pd.to_datetime(p_df['created_at'])
-                st.line_chart(p_df.set_index('created_at')['price'], color="#00ff41") 
+    st.write(f"📊 Showing {start_idx + 1} to {min(end_idx, total_rows)} of {total_rows}")
 
 if st.button('🔄 Force Manual Sync'):
     st.cache_data.clear()
