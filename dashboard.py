@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 from datetime import datetime
+import math
 
 # --- 1. PAGE SETUP ---
 st.set_page_config(page_title="Watchdog | Solana Terminal", page_icon="🛡️", layout="wide")
@@ -28,8 +29,9 @@ st.markdown("""
     [data-testid="stMetricValue"] { color: #00ff41 !important; text-shadow: 0px 0px 8px rgba(0, 255, 65, 0.5); }
     h1, h2, h3, p, label { color: #00ff41 !important; font-family: 'Share Tech Mono', monospace; }
     [data-testid="stSidebar"] { background-color: rgba(5, 5, 5, 0.95); border-right: 1px solid #00ff41; }
-    /* Target the dataframe container specifically for styling */
-    .stDataFrame { border: 1px solid #00ff41; border-radius: 5px; }
+    
+    /* Center the pagination controls */
+    .stNumberInput { width: 150px !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -40,8 +42,11 @@ def get_data():
         tokens = supabase.table("tokens").select("*").order("mcap", desc=True).execute().data
         latest_prices = supabase.table("prices").select("address, price").order("created_at", desc=True).execute().data
         price_map = {p['address']: p['price'] for p in latest_prices} if latest_prices else {}
+        
+        # Calculate health stat (prices grabbed in last hour)
         hour_ago = int(datetime.now().timestamp()) - 3600
         price_count = supabase.table("prices").select("address", count="exact").gte("ts", hour_ago).execute().count
+        
         return tokens, price_map, price_count if price_count else 0
     except Exception as e:
         st.error(f"🚨 Supabase Connection Error: {e}")
@@ -76,21 +81,29 @@ if tokens:
     tabs = st.tabs(["📋 Token Tracker", "📉 Crash Alerts"])
     
     with tabs[0]:
-        # 🔥 Added "All" option to the selector
-        limit_options = [10, 20, 50, 100, 1000, "All"]
-        row_limit = st.selectbox("Display limit:", limit_options, index=1)
+        # --- PAGINATION CONTROLS ---
+        c1, c2, c3 = st.columns([2, 2, 4])
         
-        # Logic to handle "All"
-        if row_limit == "All":
-            display_df = filtered_df.copy()
-        else:
-            display_df = filtered_df.head(int(row_limit)).copy()
+        with c1:
+            batch_size = st.selectbox("Tokens per page:", [20, 50, 100, 1000], index=0)
         
+        total_rows = len(filtered_df)
+        total_pages = math.ceil(total_rows / batch_size) if total_rows > 0 else 1
+        
+        with c2:
+            current_page = st.number_input(f"Page (1 of {total_pages})", min_value=1, max_value=total_pages, step=1)
+
+        # Calculate the batch
+        start_idx = (current_page - 1) * batch_size
+        end_idx = start_idx + batch_size
+        display_df = filtered_df.iloc[start_idx:end_idx].copy()
+        
+        # Data Prep
         display_df['Price'] = display_df['address'].map(price_map).apply(lambda x: f"${x:.6f}" if pd.notnull(x) else "---")
         display_df['mcap_fmt'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
         display_df['symbol_link'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
 
-        # 🔥 Fixed height (600) enables the internal mouse-wheel scroll you want
+        # Table Display
         st.dataframe(
             display_df[['symbol_link', 'name', 'Price', 'mcap_fmt', 'address']],
             column_config={
@@ -101,9 +114,11 @@ if tokens:
                 "address": st.column_config.TextColumn("Contract Address", width="medium"),
             },
             width="stretch", 
-            height=600, 
+            height=700, # 🔥 Stable height: Layout won't jump if last page is short
             hide_index=True
         )
+
+        st.write(f"📊 Showing tokens {start_idx + 1} to {min(end_idx, total_rows)} of {total_rows}")
 
     with tabs[1]:
         st.subheader("🚨 Recent Token Crashes")
@@ -112,7 +127,7 @@ if tokens:
             st.info("✅ No crashes detected!")
         else:
             token_options = {f"{t['symbol']} - {t['name']}": t['address'] for t in crashed_tokens}
-            sel_label = st.selectbox("Select crash:", list(token_options.keys()))
+            sel_label = st.selectbox("Select crash history:", list(token_options.keys()))
             prices_data = supabase.table("prices").select("price, created_at").eq("address", token_options[sel_label]).order("created_at", desc=False).execute().data
             if prices_data:
                 p_df = pd.DataFrame(prices_data)
