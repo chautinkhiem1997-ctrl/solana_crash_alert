@@ -29,9 +29,6 @@ st.markdown("""
     [data-testid="stMetricValue"] { color: #00ff41 !important; text-shadow: 0px 0px 8px rgba(0, 255, 65, 0.5); }
     h1, h2, h3, p, label { color: #00ff41 !important; font-family: 'Share Tech Mono', monospace; }
     [data-testid="stSidebar"] { background-color: rgba(5, 5, 5, 0.95); border-right: 1px solid #00ff41; }
-    
-    /* Center the pagination controls */
-    .stNumberInput { width: 150px !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -42,11 +39,8 @@ def get_data():
         tokens = supabase.table("tokens").select("*").order("mcap", desc=True).execute().data
         latest_prices = supabase.table("prices").select("address, price").order("created_at", desc=True).execute().data
         price_map = {p['address']: p['price'] for p in latest_prices} if latest_prices else {}
-        
-        # Calculate health stat (prices grabbed in last hour)
         hour_ago = int(datetime.now().timestamp()) - 3600
         price_count = supabase.table("prices").select("address", count="exact").gte("ts", hour_ago).execute().count
-        
         return tokens, price_map, price_count if price_count else 0
     except Exception as e:
         st.error(f"🚨 Supabase Connection Error: {e}")
@@ -81,29 +75,36 @@ if tokens:
     tabs = st.tabs(["📋 Token Tracker", "📉 Crash Alerts"])
     
     with tabs[0]:
-        # --- PAGINATION CONTROLS ---
+        # --- PAGINATION & LIMIT CONTROLS ---
         c1, c2, c3 = st.columns([2, 2, 4])
-        
         with c1:
-            batch_size = st.selectbox("Tokens per page:", [20, 50, 100, 1000], index=0)
+            # Added "All" to the options
+            batch_size_option = st.selectbox("Tokens per page:", [20, 50, 100, 1000, "All"], index=1)
         
         total_rows = len(filtered_df)
-        total_pages = math.ceil(total_rows / batch_size) if total_rows > 0 else 1
         
+        # Determine actual numeric batch size
+        if batch_size_option == "All":
+            batch_size = total_rows if total_rows > 0 else 1
+            total_pages = 1
+        else:
+            batch_size = int(batch_size_option)
+            total_pages = math.ceil(total_rows / batch_size) if total_rows > 0 else 1
+
         with c2:
             current_page = st.number_input(f"Page (1 of {total_pages})", min_value=1, max_value=total_pages, step=1)
 
-        # Calculate the batch
+        # Calculate Batch Slice
         start_idx = (current_page - 1) * batch_size
         end_idx = start_idx + batch_size
         display_df = filtered_df.iloc[start_idx:end_idx].copy()
         
-        # Data Prep
+        # Formatting
         display_df['Price'] = display_df['address'].map(price_map).apply(lambda x: f"${x:.6f}" if pd.notnull(x) else "---")
         display_df['mcap_fmt'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
         display_df['symbol_link'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
 
-        # Table Display
+        # 🔥 FULL EXPANSION DISPLAY
         st.dataframe(
             display_df[['symbol_link', 'name', 'Price', 'mcap_fmt', 'address']],
             column_config={
@@ -114,7 +115,7 @@ if tokens:
                 "address": st.column_config.TextColumn("Contract Address", width="medium"),
             },
             width="stretch", 
-            height=700, # 🔥 Stable height: Layout won't jump if last page is short
+            height=None, # 🔥 This removes internal scrolling for ALL choices
             hide_index=True
         )
 
