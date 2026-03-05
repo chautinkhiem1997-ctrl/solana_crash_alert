@@ -78,12 +78,10 @@ if tokens:
         # --- PAGINATION & LIMIT CONTROLS ---
         c1, c2, c3 = st.columns([2, 2, 4])
         with c1:
-            # Added "All" to the options
             batch_size_option = st.selectbox("Tokens per page:", [20, 50, 100, 1000, "All"], index=1)
         
         total_rows = len(filtered_df)
         
-        # Determine actual numeric batch size
         if batch_size_option == "All":
             batch_size = total_rows if total_rows > 0 else 1
             total_pages = 1
@@ -104,7 +102,7 @@ if tokens:
         display_df['mcap_fmt'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
         display_df['symbol_link'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
 
-        # 🔥 FULL EXPANSION DISPLAY
+        # 🔥 FULL EXPANSION DISPLAY WITH CORRECT HEIGHT VALUE
         st.dataframe(
             display_df[['symbol_link', 'name', 'Price', 'mcap_fmt', 'address']],
             column_config={
@@ -115,7 +113,7 @@ if tokens:
                 "address": st.column_config.TextColumn("Contract Address", width="medium"),
             },
             width="stretch", 
-            height=None, # 🔥 This removes internal scrolling for ALL choices
+            height='content', # 🔥 Fixed: Replaces None to prevent StreamlitInvalidHeightError
             hide_index=True
         )
 
