@@ -28,6 +28,8 @@ st.markdown("""
     [data-testid="stMetricValue"] { color: #00ff41 !important; text-shadow: 0px 0px 8px rgba(0, 255, 65, 0.5); }
     h1, h2, h3, p, label { color: #00ff41 !important; font-family: 'Share Tech Mono', monospace; }
     [data-testid="stSidebar"] { background-color: rgba(5, 5, 5, 0.95); border-right: 1px solid #00ff41; }
+    /* Target the dataframe container specifically for styling */
+    .stDataFrame { border: 1px solid #00ff41; border-radius: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -74,16 +76,21 @@ if tokens:
     tabs = st.tabs(["📋 Token Tracker", "📉 Crash Alerts"])
     
     with tabs[0]:
-        row_limit = st.selectbox("Display limit:", [10, 20, 50, 100, 1000], index=1)
-        display_df = filtered_df.head(row_limit).copy()
+        # 🔥 Added "All" option to the selector
+        limit_options = [10, 20, 50, 100, 1000, "All"]
+        row_limit = st.selectbox("Display limit:", limit_options, index=1)
+        
+        # Logic to handle "All"
+        if row_limit == "All":
+            display_df = filtered_df.copy()
+        else:
+            display_df = filtered_df.head(int(row_limit)).copy()
         
         display_df['Price'] = display_df['address'].map(price_map).apply(lambda x: f"${x:.6f}" if pd.notnull(x) else "---")
         display_df['mcap_fmt'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
         display_df['symbol_link'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
 
-        # 🔥 THE DYNAMIC HEIGHT FIX
-        # We tell Streamlit to use 'None' for height, which forces it to 
-        # expand fully so there is NO internal scrollbar.
+        # 🔥 Fixed height (600) enables the internal mouse-wheel scroll you want
         st.dataframe(
             display_df[['symbol_link', 'name', 'Price', 'mcap_fmt', 'address']],
             column_config={
@@ -94,7 +101,7 @@ if tokens:
                 "address": st.column_config.TextColumn("Contract Address", width="medium"),
             },
             width="stretch", 
-            height=None, # 🔥 This removes the internal scroll box entirely
+            height=600, 
             hide_index=True
         )
 
