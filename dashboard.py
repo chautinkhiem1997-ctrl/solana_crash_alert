@@ -28,8 +28,15 @@ def get_data():
         tokens = supabase.table("tokens").select("*").order("mcap", desc=True).execute().data
         hour_ago = int(datetime.now().timestamp()) - 3600
         price_count = supabase.table("prices").select("address", count="exact").gte("ts", hour_ago).execute().count
+        
+        # Sometimes count returns None if empty, so we ensure it's a number
+        if price_count is None: 
+            price_count = 0
+            
         return tokens, price_count
-    except:
+    except Exception as e:
+        # 🚨 THIS will print the actual hidden error to your dashboard!
+        st.error(f"🚨 Supabase Connection Error: {e}")
         return [], 0
 
 tokens, health_stat = get_data()
