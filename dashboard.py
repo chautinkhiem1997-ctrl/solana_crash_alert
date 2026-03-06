@@ -4,125 +4,105 @@ from supabase import create_client
 from datetime import datetime
 import math
 
-# --- 1. PAGE SETUP ---
+# --- 1. SETUP ---
 st.set_page_config(page_title="Watchdog | Solana Terminal", page_icon="🛡️", layout="wide")
-
-# --- 2. DATABASE CONNECTION ---
-URL = st.secrets["SUPABASE_URL"]
-KEY = st.secrets["SUPABASE_KEY"]
+URL, KEY = st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"]
 supabase = create_client(URL, KEY)
 
-# --- 3. STYLING ---
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-    .stApp { 
-        background-color: #050505;
-        background-image: radial-gradient(circle at 50% 0%, #002200 0%, transparent 70%);
-        color: #00ff41; font-family: 'Share Tech Mono', monospace;
-    }
-    [data-testid="stMetric"] { background-color: rgba(10, 10, 10, 0.9); border: 1px solid #00ff41; padding: 15px; border-radius: 5px; }
-    h1, h2, h3, p, label { color: #00ff41 !important; font-family: 'Share Tech Mono', monospace; }
-    .stTextInput input { background-color: #0a0a0a !important; color: #00ff41 !important; border: 1px solid #00ff41 !important; }
-    /* Navigation Bar Styling */
-    .nav-container { padding: 20px 0px; border-top: 1px solid rgba(0, 255, 65, 0.2); margin-top: 20px; }
-    </style>
-""", unsafe_allow_html=True)
-
-# --- 4. DATA LOGIC ---
+# --- 2. DATA LOGIC (MULTI-TIMEFRAME) ---
 @st.cache_data(ttl=30)
 def get_data():
     try:
+        # Get tokens and the most recent 3 hours of prices to cover all timeframes
         tokens = supabase.table("tokens").select("*").order("mcap", desc=True).execute().data
-        latest_prices = supabase.table("prices").select("address, price, created_at").order("created_at", desc=True).limit(2000).execute().data
-        price_map = {p['address']: p['price'] for p in latest_prices} if latest_prices else {}
-        last_update = latest_prices[0]['created_at'] if latest_prices else None
+        latest_prices = supabase.table("prices").select("address, price, mcap, created_at, ts").order("created_at", desc=True).limit(5000).execute().data
         
-        recent_ts = int(datetime.now().timestamp()) - 900 
-        price_count = supabase.table("prices").select("address", count="exact").gte("ts", recent_ts).execute().count
-        return tokens, price_map, (price_count if price_count else 0), last_update
+        price_map = {p['address']: p['price'] for p in latest_prices[:2000]} # Current prices
+        
+        # Calculate health (Active if price updated in last 5 mins)
+        recent_ts = int(datetime.now().timestamp()) - 300
+        health_check = any(p['ts'] >= recent_ts for p in latest_prices)
+        
+        return tokens, price_map, health_check, latest_prices
     except Exception as e:
         st.error(f"🚨 Supabase Connection Error: {e}")
-        return [], {}, 0, None
+        return [], {}, False, []
 
-tokens, price_map, health_stat, last_ts = get_data()
+tokens, price_map, is_active, all_prices = get_data()
 
-# --- 5. INITIALIZE PAGE STATE ---
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = 1
+# --- 3. MAIN INTERFACE ---
+st.title("🛡️ Solana Sniper Command Center")
 
-# --- 6. SIDEBAR ---
 with st.sidebar:
     st.title("Control Panel")
-    min_mcap = st.slider("Min Market Cap ($)", 0, 50000000, 1000000, step=500000, format="$%d")
+    # 🔥 TIMEFRAME SELECTOR (Matches Watchdog Logic)
+    selected_tf = st.selectbox(
+        "Select Monitoring Window (Mins):", 
+        [5, 10, 15, 30, 60, 120, 180], 
+        index=0
+    )
     st.divider()
-    st.status("Bot: Active" if health_stat > 0 else "Bot: Offline", state="complete" if health_stat > 0 else "error")
-    if last_ts: st.caption(f"Last Price Update: {last_ts}")
-
-# --- 7. MAIN INTERFACE ---
-st.title("🛡️ Solana Sniper Command Center")
+    st.status("Bot: Active" if is_active else "Bot: Offline", state="complete" if is_active else "error")
 
 if tokens:
     df = pd.DataFrame(tokens)
-    filtered_df = df[df['mcap'] >= min_mcap] if 'mcap' in df.columns else df
-
-    # Search Box
-    search_query = st.text_input("🔍 Search tokens...", "").strip().lower()
-    if search_query:
-        filtered_df = filtered_df[filtered_df['name'].str.lower().str.contains(search_query) | filtered_df['symbol'].str.lower().str.contains(search_query)]
-
-    st.divider()
-
-    # --- SETTINGS BEFORE TABLE ---
-    batch_size = st.selectbox("Tokens per page:", [20, 50, 100, 500], index=1)
-    total_rows = len(filtered_df)
-    total_pages = max(math.ceil(total_rows / batch_size), 1)
-
-    # Safety check for page bounds
-    if st.session_state.current_page > total_pages:
-        st.session_state.current_page = 1
-
-    # Slice data
-    start_idx = (st.session_state.current_page - 1) * batch_size
-    end_idx = min(start_idx + batch_size, total_rows)
-    display_df = filtered_df.iloc[start_idx:end_idx].copy()
     
-    if not display_df.empty:
-        # Format Data
-        display_df['Price'] = display_df['address'].map(price_map).apply(lambda x: f"${x:.6f}" if pd.notnull(x) else "---")
-        display_df['mcap_fmt'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
-        display_df['symbol_link'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
+    # --- DYNAMIC CALCULATION BASED ON SELECTED TIMEFRAME ---
+    def calc_tf_move(row, timeframe_mins):
+        addr = row['address']
+        current_mcap = row['mcap']
+        
+        # Find the price point from X minutes ago
+        target_ts = int(datetime.now().timestamp()) - (timeframe_mins * 60)
+        # Filter all_prices for this address and find the one closest to the target_ts
+        past_data = [p for p in all_prices if p['address'] == addr and p['ts'] <= target_ts]
+        
+        if not past_data: return 0.0
+        past_mcap = past_data[0]['mcap'] # The mcap at that specific timeframe
+        
+        if past_mcap == 0: return 0.0
+        return ((current_mcap - past_mcap) / past_mcap) * 100
 
-        # The Table
-        st.dataframe(
-            display_df[['symbol_link', 'name', 'Price', 'mcap_fmt', 'address']],
-            column_config={
-                "symbol_link": st.column_config.LinkColumn("Ticker", display_text=r"https://.*?#(.*)$", width="small"),
-                "address": st.column_config.TextColumn("Contract Address", width="medium"),
-            },
-            width="stretch", height='content', hide_index=True
-        )
+    # Calculate the move for the column
+    df['Move %'] = df.apply(lambda x: calc_tf_move(x, selected_tf), axis=1)
 
-        # --- 8. THE PRO NAVIGATION BAR (BOTTOM) ---
-        st.markdown('<div class="nav-container"></div>', unsafe_allow_html=True)
-        col_text, col_prev, col_next = st.columns([4, 1, 1])
+    # --- SEARCH & PAGINATION ---
+    search = st.text_input("🔍 Search tokens...", "").lower()
+    if search:
+        df = df[df['name'].str.lower().str.contains(search) | df['symbol'].str.lower().str.contains(search)]
 
-        with col_text:
-            st.write(f"Showing tokens **{start_idx + 1} - {end_idx}** of **{total_rows}**")
+    batch_size = st.selectbox("Rows:", [20, 50, 100], index=1)
+    total_pages = max(math.ceil(len(df) / batch_size), 1)
+    
+    if 'page' not in st.session_state: st.session_state.page = 1
+    display_df = df.iloc[(st.session_state.page-1)*batch_size : st.session_state.page*batch_size].copy()
 
-        with col_prev:
-            if st.button("⬅️ Previous", disabled=(st.session_state.current_page == 1), use_container_width=True):
-                st.session_state.current_page -= 1
-                st.rerun()
+    # Formatting
+    display_df['Price'] = display_df['address'].map(price_map).apply(lambda x: f"${x:.6f}" if x else "---")
+    display_df['mcap_fmt'] = display_df['mcap'].apply(lambda x: f"${int(x):,}")
+    display_df['Ticker'] = "https://dexscreener.com/solana/" + display_df['address'] + "#" + display_df['symbol']
 
-        with col_next:
-            if st.button("Next ➡️", disabled=(st.session_state.current_page == total_pages), use_container_width=True):
-                st.session_state.current_page += 1
-                st.rerun()
-    else:
-        st.warning("No tokens found matching your filters.")
+    # --- THE TABLE ---
+    st.dataframe(
+        display_df[['Ticker', 'name', 'Price', 'mcap_fmt', 'Move %']],
+        column_config={
+            "Ticker": st.column_config.LinkColumn("Ticker", display_text=r"https://.*?#(.*)$"),
+            "Move %": st.column_config.NumberColumn(f"{selected_tf}m Move", format="%.2f%%"),
+        },
+        width="stretch", height='content', hide_index=True
+    )
 
-st.divider()
+    # --- FOOTER NAV ---
+    col_text, col_prev, col_next = st.columns([4, 1, 1])
+    col_text.write(f"Displaying {len(display_df)} tokens on {selected_tf}m window")
+    
+    if col_prev.button("⬅️ Prev", disabled=(st.session_state.page == 1)):
+        st.session_state.page -= 1
+        st.rerun()
+    if col_next.button("Next ➡️", disabled=(st.session_state.page == total_pages)):
+        st.session_state.page += 1
+        st.rerun()
+
 if st.button('🔄 Force Manual Sync'):
     st.cache_data.clear()
     st.rerun()
