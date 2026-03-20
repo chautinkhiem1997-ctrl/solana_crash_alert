@@ -81,7 +81,7 @@ def run_watchdog():
 
     # 🔥 FETCH ALL HISTORY AT ONCE (Prevents 1500 individual requests)
     try:
-        all_history = supabase.table("prices").select("address, ts, price").gte("ts", max_lookback).execute().data
+        all_history = supabase.table("prices").select("address, ts, price").gte("ts", max_lookback).limit(100000).execute().data
         
         # Organize data into a dictionary for instant lookup
         history_map = {}
